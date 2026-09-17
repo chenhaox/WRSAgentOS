@@ -19,6 +19,10 @@ from wrs_agent.skills import SPECS, validate_skill
 from wrs_agent.store import Journal
 
 
+class SkillFailure(ValueError):
+    """Known effect-free failure with an explicit machine-readable reason."""
+
+
 class ExecutionUnknown(RuntimeError):
     """Backend effect/stop cannot be confirmed; admission must remain closed."""
 
@@ -239,6 +243,8 @@ class ActionExecutor:
             self.stop_confirmed = False
             self._status(aid, "UNKNOWN", "worker_cancelled", "INCONCLUSIVE")
             raise
+        except SkillFailure as exc:
+            self._status(aid, "FAILED", str(exc), "FAIL")
         except ExecutionUnknown:
             self.admission = "UNKNOWN"
             self.stop_confirmed = False

@@ -21,7 +21,7 @@ HoloAgent、RPent、DimOS 是设计参考，不是本项目运行依赖。Zenoh 
 | ASR/KWS/VAD/TTS 权重 | 显式资产清单与本地缓存 | 按语音 profile | 固定 revision、checksum、来源、体积和授权；不放主 Git，不自动下载 |
 | numpy、WGPU、MuJoCo、WRS 相关依赖 | 独立 WRS 环境或可选组 | WRS profile 按需 | 不把 README 中所有可选依赖灌入 core |
 | pytest、pytest-asyncio、ruff | 开发依赖组 | 开发必需 | 排除 third_party；不要重格式化 WRS |
-| HoloAgent/RPent/DimOS | 文档、源码局部阅读 | 设计参考 | 可放 gitignored `.local/references/`，不递归安装全套依赖 |
+| HoloAgent/RPent/DimOS | 文档、源码局部阅读 | 设计参考 | 本地忽略的 `.references/`，不递归安装全套依赖 |
 | LeRobot/openpi/其他 VLA 平台 | 未来独立模型服务或可选包 | V1 不引入 | 真正要维护源码 fork 时再评估 submodule；权重与代码分开 |
 | `wrs-skills` 独立技能仓库 | 未来可选 submodule/包 | V1 不拆 | 仅在多个项目共享、独立版本发布时才值得拆库 |
 
@@ -85,3 +85,5 @@ bootstrap 用项目本地 uv 0.12.15 从 uv.lock 导出带哈希 requirements，
 参考仓库中的 Skill 文档不能不经审查自动成为模型的高权限指令。少量源码复用记录来源与授权。机器人模型网格、数据和模型权重的授权可能不同于顶层代码许可证，应分别登记；本文件不是对未审计资产的商用授权承诺。
 
 2026-09-17：GLM 使用 httpx 异步客户端直接发送 OpenAI 兼容 JSON；原计划 openai SDK 为候选，未引入。可运行 `./scripts/bootstrap.ps1 -Extra glm`；锁文件由 uv 0.12.15 重新生成，不修改共享 Python。只有非流式/auto 工具模式经离线协议测试，真实账号模型及 GLM TTS 未验证。
+
+M3 科学包路径补充：指定 venv 的 pyvenv.cfg 设置 include-system-site-packages=true。WRS adapter 仅在自己的进程向 sys.path 后部追加该 venv 与基础解释器的 site-packages；项目锁定 core 包优先，固定 WRS submodule 位于前部并检查真实模块路径。不执行 .pth、不升级或修改共享包。M3 干净机器科学依赖重建仍未验证。

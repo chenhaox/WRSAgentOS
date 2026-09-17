@@ -57,11 +57,16 @@ async def node(args):
             register_actions(transport, owner)
         elif args.role == "runtime":
             tts = connect(args.env_id + suffixes["tts"])
-            model = MockClient(
-                '{"kind":"execute","plan":{"steps":['
-                '{"step_id":"home","skill":"move_named_pose","args":{"pose":"home"}}]}}',
-                deferred=args.deferred_planner,
-            )
+            if args.model_provider == "glm":
+                from wrs_agent.planner.providers.glm import GLMClient, GLMConfig
+
+                model = GLMClient(GLMConfig.from_env(), live_model=args.live_model)
+            else:
+                model = MockClient(
+                    '{"kind":"execute","plan":{"steps":['
+                    '{"step_id":"home","skill":"move_named_pose","args":{"pose":"home"}}]}}',
+                    deferred=args.deferred_planner,
+                )
             owner = Runtime(
                 {"wrs": ActionClient(transport), "tts": ActionClient(tts)},
                 bindings,
@@ -108,6 +113,8 @@ async def main():
     parser.add_argument("--site", default="local")
     parser.add_argument("--env-id", default="arm01")
     parser.add_argument("--journal")
+    parser.add_argument("--model-provider", choices=["mock", "glm"], default="mock")
+    parser.add_argument("--live-model", action="store_true")
     parser.add_argument("--backend", choices=["mock", "wrs_virtual"], default="mock")
     parser.add_argument("--duration", type=float, default=0.4)
     parser.add_argument(
@@ -116,14 +123,30 @@ async def main():
         help="offline test fixture; no GLM request is sent",
     )
     parser.add_argument(
-        "--fault", choices=["grasp", "localization", "unknown", "inconclusive", "stop_unknown"]
+        "--fault",
+        choices=[
+            "grasp",
+            "grasp_once",
+            "localization",
+            "localization_once",
+            "unknown",
+            "inconclusive",
+            "stop_unknown",
+        ],
     )
     args = parser.parse_args()
+    if args.model_provider == "glm" and (not args.live_model or args.deferred_planner):
+        parser.error("GLM requires --live-model and cannot use --deferred-planner")
     if args.duration <= 0 or args.duration > 30:
         parser.error("duration must be in (0, 30]")
     if args.role == "launch":
         async with LocalStack(
-            duration=args.duration, port=7447, voice=True, backend=args.backend
+            duration=args.duration,
+            port=7447,
+            voice=True,
+            backend=args.backend,
+            model_provider=args.model_provider,
+            live_model=args.live_model,
         ) as stack:
             print(
                 f"ready {args.backend} stack: {stack.endpoint} {stack.env_id}; Ctrl+C to stop",

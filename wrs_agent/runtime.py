@@ -1,25 +1,33 @@
 """Bounded DAG scheduling across explicitly bound nodes, with one Planner."""
 
 import asyncio
+from collections import deque
 
+from wrs_agent.cache import PlanCache
 from wrs_agent.environments.api import Environment
-from wrs_agent.planner.api import Planner, PlanRequest
+from wrs_agent.planner.api import PlanDecision, Planner, PlanRequest
 from wrs_agent.schemas import (
     TERMINAL,
     ActionRequest,
     ControlRequest,
     Plan,
+    Step,
     TaskControl,
     TaskRequest,
     new_id,
 )
-from wrs_agent.skills import SPECS, validate_skill
+from wrs_agent.skills import SPECS, lookup_skills, validate_skill
 
 
-def validate_plan(plan):
+def validate_plan(plan, capabilities=None, bindings=None):
     plan = Plan.model_validate_json(plan.model_dump_json())
     for step in plan.steps:
         validate_skill(step.skill, step.version, step.args)
+        if capabilities is not None:
+            node = (bindings or {}).get(step.skill, SPECS[step.skill].node)
+            cap = capabilities.get(node)
+            if cap is None or not set(SPECS[step.skill].required_capabilities).issubset(cap.skills):
+                raise ValueError("unsupported_skill_on_current_node")
     return plan
 
 
@@ -44,6 +52,10 @@ class Runtime:
         self.planning = None
         self.planning_state = "IDLE"
         self.queued = []
+        self.cache = PlanCache()
+        self.recoveries = 0
+        self.recovery_revision = None
+        self.action_history = deque(maxlen=128)
 
     def snapshot(self):
         actions = dict(self.active_actions)
@@ -58,6 +70,13 @@ class Runtime:
             "planning": self.planning_state,
             "planner_calls": self.planner_calls,
             "queued": len(self.queued),
+            "cache_hit": self.cache.last_hit,
+            "cache_hits": self.cache.hits,
+            "cache_misses": self.cache.misses,
+            "cache_reject_reason": self.cache.reject_reason,
+            "semantic_shadow": self.cache.shadow_candidate,
+            "recoveries": self.recoveries,
+            "action_history": list(self.action_history),
         }
 
     def _spawn(self, coroutine):
@@ -118,7 +137,10 @@ class Runtime:
         if self.state not in {"IDLE", "SUCCEEDED", "FAILED", "CANCELLED", "RUNNING"}:
             raise ValueError("task_held")
         # A new decision during execution is pending; it never implicitly resumes a held node.
-        self.revision += 1 if self.state != "RUNNING" else 0
+        if self.state != "RUNNING":
+            self.revision += 1
+            self.task_id = new_id()
+            self.reason, self.results = "", {}
         self.planning_state = "WAITING"
         result = {"accepted": True, "revision": self.revision}
         self.requests[request.request_id] = (data, result)
@@ -126,15 +148,23 @@ class Runtime:
         return result
 
     async def _plan(self, goal, revision):
+        was_running = self.state == "RUNNING"
         try:
             worlds = {name: await node.snapshot(control=True) for name, node in self.nodes.items()}
+            capabilities = {name: await node.capabilities() for name, node in self.nodes.items()}
             request = PlanRequest(
                 user_goal=goal,
                 world={n: w.model_dump() for n, w in worlds.items()},
-                skills=[spec.model_dump() for spec in SPECS.values()],
+                skills=[
+                    spec.model_dump() for spec in lookup_skills(goal, capabilities, self.bindings)
+                ],
             )
-            self.planner_calls += 1
-            decision = await self.planner.plan(request)
+            cached = self.cache.lookup(goal, worlds, capabilities, self.bindings)
+            if cached is None:
+                self.planner_calls += 1
+                decision = await self.planner.plan(request)
+            else:
+                decision = PlanDecision(kind="execute", plan=cached)
             if revision != self.revision or self.closed:
                 self.planning_state = "STALE"
                 return
@@ -145,6 +175,7 @@ class Runtime:
                     current.boot_id != old.boot_id
                     or current.control_epoch != old.control_epoch
                     or current.admission != "OPEN"
+                    or current.world_version != old.world_version
                 ):
                     self.planning_state = "STALE"
                     return
@@ -160,14 +191,33 @@ class Runtime:
                 return
             self.planning_state = "DONE"
             self.state = "RUNNING"
-            await self._execute(validate_plan(decision.plan), revision)
+            validated = validate_plan(decision.plan, capabilities, self.bindings)
+            await self._execute(validated, revision)
+            if revision == self.revision:
+                if self.state == "SUCCEEDED":
+                    self.cache.remember(goal, validated, worlds, capabilities, self.bindings)
+                else:
+                    self.cache.invalidate(goal, self.reason or self.state)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if revision != self.revision or self.closed:
+                self.planning_state = "STALE"
+                return
             self.planning_state = "FAILED"
             self.reason = str(exc)[:240]
+            self.cache.invalidate(goal, self.reason)
+            if not was_running:
+                self.state = "FAILED"
 
     async def _execute(self, plan, revision):
+        try:
+            capabilities = {name: await node.capabilities() for name, node in self.nodes.items()}
+            validate_plan(plan, capabilities, self.bindings)
+        except Exception:
+            if revision == self.revision:
+                self.state, self.reason = "FAILED", "capability_preflight_failed"
+            return
         done = {step.step_id: asyncio.Event() for step in plan.steps}
         outcomes = {}
 
@@ -228,6 +278,8 @@ class Runtime:
             if values != {"SUCCEEDED"}
             else "SUCCEEDED"
         )
+        if self.state == "SUCCEEDED":
+            self.reason = ""
         if self.state == "SUCCEEDED" and self.queued and not self.closed:
             queued = self.queued.pop(0)
             self.revision += 1
@@ -236,12 +288,59 @@ class Runtime:
             self._spawn(self._execute(queued, self.revision))
 
     async def _run_step(self, step, node_name, revision):
+        outcome, status, original = await self._attempt(step, node_name, revision)
+        if (
+            outcome != "FAILED"
+            or status.verification != "FAIL"
+            or status.reason not in {"localization_failed", "grasp_failed"}
+            or "observe_once" not in SPECS[step.skill].recovery
+            or self.recovery_revision == revision
+            or revision != self.revision
+            or self.closed
+        ):
+            return outcome
+        node = self.nodes[node_name]
+        authority = (original.boot_id, original.control_epoch)
+        current = await node.snapshot()
+        if not self._recoverable_state(step, current, authority, revision):
+            return outcome
+        capabilities = await node.capabilities()
+        if "observe" not in capabilities.skills or step.skill not in capabilities.skills:
+            return outcome
+        self.recovery_revision = revision
+        self.recoveries += 1
+        observe = Step(step_id="recovery-" + new_id(), skill="observe")
+        observed, _, _ = await self._attempt(observe, node_name, revision, authority)
+        if observed != "SUCCEEDED":
+            return observed
+        current = await node.snapshot()
+        if not self._recoverable_state(step, current, authority, revision):
+            return "BLOCKED"
+        # Exactly one new action, with a fresh ID and receiver-issued authorization.
+        return (await self._attempt(step, node_name, revision, authority))[0]
+
+    def _recoverable_state(self, step, world, authority, revision):
+        return (
+            revision == self.revision
+            and not self.closed
+            and (world.boot_id, world.control_epoch) == authority
+            and world.admission == "OPEN"
+            and world.stop_confirmed
+            and world.active_action is None
+            and world.held_object is None
+            and world.objects.get(step.args.get("object")) not in {None, "gripper"}
+            and (world.kinematics is None or world.kinematics.valid)
+        )
+
+    async def _attempt(self, step, node_name, revision, authority=None):
         node = self.nodes[node_name]
         world = await node.snapshot()
         if revision != self.revision or self.closed:
-            return "STALE"
+            return "STALE", None, world
+        if authority is not None and (world.boot_id, world.control_epoch) != authority:
+            return "STALE", None, world
         if world.admission != "OPEN":
-            return "BLOCKED"
+            return "BLOCKED", None, world
         action = ActionRequest(
             action_id=new_id(),
             task_id=self.task_id,
@@ -266,17 +365,26 @@ class Runtime:
                 if not receipt.accepted:
                     raise ValueError(receipt.reason)
                 status = receipt.status
+            self.action_history.append(
+                {
+                    "action_id": action.action_id,
+                    "skill": action.skill,
+                    "revision": revision,
+                }
+            )
             async with asyncio.timeout(SPECS[step.skill].timeout):
                 while status is not None and status.state not in TERMINAL:
                     if revision != self.revision or self.closed:
-                        return "STALE"
+                        return "STALE", None, world
                     await asyncio.sleep(0.01)
                     status = await node.status(action.action_id)
             if status is None or status.state == "UNKNOWN":
                 raise ValueError("UNKNOWN: missing_or_inconclusive_status")
             if status.state == "SUCCEEDED" and status.verification != "PASS":
                 raise ValueError("UNKNOWN: missing_verification")
-            return status.state
+            if status.state == "FAILED":
+                self.reason = status.reason
+            return status.state, status, world
         finally:
             if self.active_actions.get(step.step_id) == action.action_id:
                 self.active_actions.pop(step.step_id)

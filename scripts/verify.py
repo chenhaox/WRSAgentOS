@@ -1,5 +1,6 @@
 """Run real checks and preserve their outputs; never manufactures PASS entries."""
 
+import argparse
 import json
 import subprocess
 import sys
@@ -10,6 +11,9 @@ REPORTS = ROOT / "reports"
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--wrs", action="store_true", help="Include real WRS virtual node checks")
+    args = parser.parse_args()
     REPORTS.mkdir(exist_ok=True)
     checks = [
         ("unit", ["-m", "pytest", "-q", "tests/unit", "--junitxml=reports/unit.xml"]),
@@ -21,16 +25,39 @@ def main():
                 "-q",
                 "tests/integration",
                 "-m",
-                "zenoh",
+                "zenoh and not wrs",
                 "--junitxml=reports/zenoh.xml",
             ],
         ),
         ("roundtrip", ["examples/01_zenoh_roundtrip.py"]),
         ("parallel_interrupt", ["examples/02_mock_interrupt.py"]),
         ("glm_fixture", ["examples/04_glm_task.py", "--dry-run"]),
+        ("skill_library", ["examples/09_skill_library.py"]),
+        ("plan_cache", ["examples/05_cache_reuse.py"]),
         ("lint", ["-m", "ruff", "check", "wrs_agent", "tests", "examples", "scripts"]),
-        ("doctor", ["scripts/doctor.py", "--probe-wrs", "--output", "reports/doctor.json"]),
+        (
+            "doctor",
+            ["scripts/doctor.py", "--output", "reports/doctor.json"]
+            + (["--probe-wrs"] if args.wrs else []),
+        ),
     ]
+    if args.wrs:
+        checks += [
+            (
+                "wrs_virtual_runtime",
+                [
+                    "-m",
+                    "pytest",
+                    "-q",
+                    "tests/integration",
+                    "-m",
+                    "wrs",
+                    "--junitxml=reports/wrs.xml",
+                ],
+            ),
+            ("wrs_complete", ["examples/03_wrs_scene.py"]),
+            ("wrs_cancel", ["examples/03_wrs_scene.py", "--cancel"]),
+        ]
     results = []
     for name, arguments in checks:
         command = python_command(*arguments)
@@ -51,7 +78,8 @@ def main():
             {
                 "test_id": name,
                 "profile": "zenoh_mock"
-                if name in {"zenoh", "roundtrip", "parallel_interrupt"}
+                if name
+                in {"zenoh", "roundtrip", "parallel_interrupt", "skill_library", "plan_cache"}
                 else name,
                 "status": status,
                 "command": command,
@@ -62,7 +90,8 @@ def main():
         )
         print(f"{name}: {status}", flush=True)
     for test_id, reason in {
-        "wrs_virtual_runtime": "Import/FK only; continuous virtual Action adapter is M3.",
+        **({} if args.wrs else {"wrs_virtual_runtime": "Opt in with scripts/verify.py --wrs."}),
+        "wrs_pick_place": "Unsupported in bare Lite6 profile; no validated grasp/contact scene.",
         "glm_live": "GLM HTTP fixtures only; no account model/use authorization, no live call.",
         "audio_live": "Voice replay and Mock TTS only; microphone/ASR/audible output untested.",
         "vision_node": "No independent Vision process in this minimum increment.",

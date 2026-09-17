@@ -18,7 +18,11 @@ class MockClient:
         self.calls += 1
         self.entered.set()
         await self.gate.wait()
-        return ModelReply(text=self.reply, finish="complete", metadata={"provider": "mock"})
+        return ModelReply(
+            text=self.reply(request) if callable(self.reply) else self.reply,
+            finish="complete",
+            metadata={"provider": "mock"},
+        )
 
     async def aclose(self):
         self.gate.set()

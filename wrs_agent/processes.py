@@ -78,9 +78,14 @@ class LocalStack:
         voice=False,
         deferred=False,
         backend="mock",
+        model_provider="mock",
+        live_model=False,
     ):
         if backend not in {"mock", "wrs_virtual"}:
             raise ValueError("unsupported_backend")
+        if model_provider not in {"mock", "glm"} or (model_provider == "glm" and not live_model):
+            raise ValueError("invalid_model_provider_or_missing_live_opt_in")
+        self.model_provider, self.live_model = model_provider, live_model
         self.backend = backend
         self.with_runtime, self.duration, self.fault = runtime, duration, fault
         self.with_tts, self.with_voice, self.deferred = tts, voice, deferred
@@ -157,6 +162,8 @@ class LocalStack:
         )
         if role == "environment":
             result.extend(["--backend", self.backend])
+        if role == "runtime" and self.model_provider == "glm":
+            result.extend(["--model-provider", "glm", "--live-model"])
         if self.deferred and role == "runtime":
             result.append("--deferred-planner")
         if self.fault:

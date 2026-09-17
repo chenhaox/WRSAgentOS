@@ -114,3 +114,22 @@ async def test_runtime_schedules_real_wrs_node():
         )
         assert done["state"] == "SUCCEEDED"
         assert (await ActionClient(stack.transport).capabilities()).backend == "wrs_virtual"
+
+
+async def test_unsupported_wrs_step_prevents_partial_tts_side_effect():
+    async with LocalStack(backend="wrs_virtual", duration=0.1) as stack:
+        plan = Plan(
+            steps=[
+                Step(step_id="say", skill="speak", args={"text": "starting"}),
+                Step(step_id="pick", skill="pick", args={"object": "A"}),
+            ]
+        )
+        await stack.transport.request(
+            "request/task/start", {"request_id": new_id(), "plan": plan.model_dump()}
+        )
+        await eventually(
+            lambda: stack.transport.request("request/task/status", {}),
+            lambda s: s["state"] == "FAILED",
+        )
+        for bus in stack.node_transports.values():
+            assert (await bus.request("request/health", {}))["executions"] == 0
