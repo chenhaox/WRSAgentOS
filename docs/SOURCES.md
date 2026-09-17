@@ -140,3 +140,11 @@ Claude 客户端工具使用 tool_use/tool_result 等结构。Provider 适配负
 rpent/utils/rpc/client_utils.py 的 health/ready 探测及会话隔离；
 DimOS dimos/core/module.py 的 SkillInfo/lifecycle、core/transport.py 的 RPC/流边界；
 HoloAgent 上述脚本的描述索引。只提取小机制，没有代码复制或新增运行依赖。
+
+## S20 · 同步脚本 API 参考（2026-09-17）
+
+- https://www.python-httpx.org/async/ ：普通同步入口与显式异步入口并存，借鉴使用方式，不复制 HTTPX 实现。
+- https://docs.python.org/3.12/library/asyncio-runner.html ：Runner 复用同一事件循环运行多次调用，管理退出清理。
+- https://anyio.readthedocs.io/en/stable/threads.html ：审阅 BlockingPortal 的跨线程方案；当前独立节点已持续执行，未引入该依赖或线程桥。
+
+本项目自行实现薄同步客户端，只调用既有 System/Action。没有直接复制或明显改编非平凡代码。

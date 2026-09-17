@@ -170,3 +170,26 @@ WRS 仍仅验证 Lite6 FK 虚拟运动、停止边界和准入；没有新增机
 GLM 仍仅离线 HTTP 夹具；没有真实调用（账号模型/适用服务授权未落实）。
 真实 ASR/TTS/Vision/硬件/双机 ACL 未验证。没有推进 M6/M7/M8 功能。
 缓存算法未改，05 仍为 Mock model_calls 1→1→2→3。
+
+## 同步脚本 API 验收（2026-09-17）
+
+使用普通 with launch()、action/status/wait/cancel；主示例 03/10 不需要 async/await。
+原 System.local() 异步入口保留。同步模块 105 行，无新增依赖、后台事件循环线程、
+调度器、消息协议或设备实现；方法转发到原 System/Action。
+
+实际运行 ./scripts/run.ps1 scripts/verify.py --wrs：
+125 unit + 30 真实 Zenoh/Mock + 5 真实 WRS FK = **160 passed**，
+0 failed/errors/skipped；原 151 项保留，新增 9 项。
+最终 full run 的 Ruff 对一个参数化测试的 timeout 参数名报错；
+仅改名 wait_timeout 后，单独重跑 tests/unit/test_sync_runner.py 为 5 passed，
+ruff check wrs_agent tests examples scripts 为 PASS。未重复或降低功能测试。
+所有示例、WRS 完成/取消、doctor 通过。
+
+证据 reports/sync_api_summary.json、acceptance.json、JUnit；
+先前 lint 输出保留 reports/sync_lint_before.txt，后续实测结果在 lint.txt。
+新增覆盖：调用端 time.sleep 期间节点并行完成、wait 超时不取消动作、
+TTS 局部取消/WRS 停止、任务依赖/进度迭代、异常/KeyboardInterrupt 退出清理、
+启动失败、异步环境/跨线程/关闭后误用、watch 不跨 yield 取消调用者，
+以及 timeout=None 兼容。
+
+仍仅 Mock 音频与 WRS FK 虚拟结果；没有真实 GLM、ASR/TTS 或硬件调用。

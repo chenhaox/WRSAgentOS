@@ -109,14 +109,17 @@ class System:
 
     async def watch(self, *, timeout=10):  # noqa: ASYNC109 - bounded observation
         """Read task progress without involving Planner or stopping any action."""
-        async with asyncio.timeout(timeout):
-            while True:
+        deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
+        while True:
+            # Never leave a task-bound timeout active while yielding to caller code.
+            async with asyncio.timeout_at(deadline):
                 state = await self.status()
-                yield state
-                if state["planning"] != "WAITING" and state["state"] in TERMINAL:
-                    return
-                if state["planning"] in {"ANSWER", "CLARIFY", "FAILED", "STALE"}:
-                    return
+            yield state
+            if state["planning"] != "WAITING" and state["state"] in TERMINAL:
+                return
+            if state["planning"] in {"ANSWER", "CLARIFY", "FAILED", "STALE"}:
+                return
+            async with asyncio.timeout_at(deadline):
                 await asyncio.sleep(0.02)
 
     async def wait(self, *, timeout=10):  # noqa: ASYNC109 - bounded public wait

@@ -4,37 +4,50 @@
 
 技能由 `configs/bindings.toml` 显式绑定执行节点。Runtime 按依赖和资源调度；WRS 只执行机器人技能，TTS 自己管理播报。Voice 可直接取消 TTS 或停止 WRS；查询和 VAD 不停止机械臂。模型等待不会占用控制路径。
 
-日常使用只需要两个入口：`System` 连接节点，`step` 描述技能和依赖：
+普通 Python 脚本使用 `launch()`，无需 `async/await`：
 
 ```python
-import asyncio
-from wrs_agent import System, step
+from wrs_agent import launch
 
-async def main():
-    async with System.local() as system:  # 真 Zenoh + 独立 Mock 节点
-        picked = step("pick", object="A")
-        placed = step("place", object="A", target="B", after=picked)
-        await system.start(
-            step("speak", text="我正在处理。"),  # 与抓取并行
-            picked, placed,
-            step("verify", object="A", target="B", after=placed),
-        )
-        print((await system.wait())["state"])
-
-asyncio.run(main())
+with launch() as system:  # 真 Zenoh + 独立 Mock 节点，退出时清理
+    speech = system.action("speak", text="我正在处理")
+    motion = system.action("move_named_pose", pose="B")
+    print(motion.status())  # 只读查询
+    speech.cancel()        # 只取消这次播报
+    print(motion.wait())    # 此处才等待机器人动作完成
 ```
 
-`start` 快速返回，`wait` 等待任务结果；`status`/`watch` 只读进度。
-直接测试某项能力可用 `action = await system.action("speak", text="你好")`，
-再调用 `action.status()`、`action.wait()` 或 `action.cancel()`。
-调用端不需要构造 ID、epoch 和授权。直接动作仍经过节点权限、资源与验证检查。
-`System.local(backend="wrs_virtual")` 切换到真实 WRS 虚拟 FK，不连接硬件。
+`action()` 收到接收回执就返回句柄，长动作在各节点继续并行执行。
+`cancel()` 返回取消接收结果，随后 `wait()`/`status()` 确认终态。
+`wait(timeout=...)` 超时只结束本次等待；需要停止时显式调用 `cancel()`。
+只有普通脚本调用端被等待阻塞，独立 Voice/Agent/WRS/TTS 节点继续运行。
 
-`await system.nodes()` 直接查询配置中的 node_id/type/boot_id、技能、能力、资源和 ready。
-视图超过两秒会标 stale，执行前复查；离线/未就绪不自动切换到别的执行端。
-Skill Registry 描述技能，Node Registry 描述当前可用的执行者；配置才决定绑定，
-Planner 只提出技能。V1 capability 名沿用技能标识（如 pick），没有另一套同义命名表。
-agent/wrs/tts/voice 已运行；vision 只有 disabled 声明，不伪造观测。
+多步任务只需 `step(..., after=...)` 描述依赖，原 Runtime 调度不变：
+
+```python
+from wrs_agent import launch, step
+
+with launch() as system:
+    picked = step("pick", object="A")
+    placed = step("place", object="A", target="B", after=picked)
+    system.start(
+        step("speak", text="我正在处理"),  # 与抓取并行
+        picked, placed,
+        step("verify", object="A", target="B", after=placed),
+    )
+    print(system.wait()["state"])
+```
+
+`start/goal` 快速接收任务；`status/watch` 查询或迭代进度，不调用 Planner。
+`nodes()` 直接查询配置中的节点、技能、能力和 ready。Skill Registry 描述技能，
+Node Registry 描述当前执行者；配置决定绑定，模型只提出技能。
+在线视图超过两秒标 stale，提交前复查；Vision 仍只有 disabled 声明。
+
+`launch(backend="wrs_virtual")` 使用真实 WRS FK 虚拟节点，不连接硬件；
+当前 WRS profile 仅支持 observe/move_named_pose，pick/place 例子使用 Mock。
+同步入口适用于普通单线程脚本。已有异步程序继续使用
+`async with System.local()`，方法语义相同。同步包装仅复用一个标准库
+`asyncio.Runner`，不新增后台事件循环线程、依赖、调度器或协议。
 
 节点无需共同继承基类。通用 ActionClient 提供 context/submit/status/cancel；
 RobotClient 额外提供 snapshot/hold/resume。TTS 没有 hold/resume 服务；
