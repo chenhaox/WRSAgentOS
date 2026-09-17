@@ -20,3 +20,4 @@ reports/
 .agents/
 .env.*
 !.env.example
+.references/

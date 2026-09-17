@@ -19,14 +19,33 @@ from wrs_agent.skills import SPECS, validate_skill
 from wrs_agent.store import Journal
 
 
+class ExecutionUnknown(RuntimeError):
+    """Backend effect/stop cannot be confirmed; admission must remain closed."""
+
+
 class ActionExecutor:
-    def __init__(self, journal_path, *, state, perform, skills, backend, duration=0.4, fault=None):
+    def __init__(
+        self,
+        journal_path,
+        *,
+        state,
+        perform,
+        skills,
+        backend,
+        duration=0.4,
+        fault=None,
+        advance=None,
+        close_backend=None,
+        capabilities_extra=None,
+    ):
         self.boot_id = new_id()
         self.epoch = 0
         self.journal = Journal(journal_path)
         self.records = self.journal.records.copy()
         self.world = state
         self.perform = perform
+        self.advance, self.close_backend = advance, close_backend
+        self.capabilities_extra = capabilities_extra or {}
         self.skills = frozenset(skills)
         self.backend = backend
         self.admission = "HELD" if self.records else "OPEN"
@@ -48,6 +67,7 @@ class ActionExecutor:
         return CapabilitySnapshot(
             skills=sorted(self.skills),
             backend=self.backend,
+            **self.capabilities_extra,
             resources=sorted({r for name in self.skills for r in SPECS[name].resources}),
         )
 
@@ -71,12 +91,13 @@ class ActionExecutor:
         record = self.records.get(action_id)
         return record[1] if record else None
 
-    def _status(self, action_id, state, reason="", verification="PENDING"):
+    def _status(self, action_id, state, reason="", verification="PENDING", progress=None):
         request, old = self.records[action_id]
         status = ActionStatus(
             action_id=action_id,
             state=state,
             sequence=old.sequence + 1,
+            progress=old.progress if progress is None else progress,
             reason=reason,
             verification=verification,
         )
@@ -167,10 +188,22 @@ class ActionExecutor:
             self._status(aid, "RUNNING")
             self.executions += 1
             await self._save(aid)
-            try:
-                await asyncio.wait_for(self.stop_signal.wait(), timeout=self.duration)
-            except TimeoutError:
-                pass
+            args = validate_skill(request.skill, request.version, request.args)
+            verified = False
+            if self.advance is not None:
+
+                def progress(value):
+                    if not self.stop_signal.is_set():
+                        self._status(aid, "RUNNING", progress=value)
+                        self.on_event("state/world", self.snapshot().model_dump())
+
+                if not self.stop_signal.is_set():
+                    verified = await self.advance(request.skill, args, self.stop_signal, progress)
+            else:
+                try:
+                    await asyncio.wait_for(self.stop_signal.wait(), timeout=self.duration)
+                except TimeoutError:
+                    pass
             if (
                 self.stop_signal.is_set()
                 or request.control_epoch != self.epoch
@@ -189,8 +222,8 @@ class ActionExecutor:
                 self.stop_confirmed = False
                 self._status(aid, "UNKNOWN", "observation_inconclusive", "INCONCLUSIVE")
                 return
-            args = validate_skill(request.skill, request.version, request.args)
-            verified = self.perform(request.skill, self.world, args, self.fault)
+            if self.advance is None:
+                verified = self.perform(request.skill, self.world, args, self.fault)
             self.world.version += 1
             self._status(aid, "VERIFYING")
             # No await between virtual effect and verification: one state owner.
@@ -199,12 +232,17 @@ class ActionExecutor:
                 "SUCCEEDED" if verified else "FAILED",
                 "" if verified else "postcondition_failed",
                 "PASS" if verified else "FAIL",
+                progress=1.0,
             )
         except asyncio.CancelledError:
             self.admission = "UNKNOWN"
             self.stop_confirmed = False
             self._status(aid, "UNKNOWN", "worker_cancelled", "INCONCLUSIVE")
             raise
+        except ExecutionUnknown:
+            self.admission = "UNKNOWN"
+            self.stop_confirmed = False
+            self._status(aid, "UNKNOWN", "backend_state_unknown", "INCONCLUSIVE")
         except Exception:
             if self.status(aid).state != "UNKNOWN":
                 self._status(aid, "FAILED", "precondition_or_execution_failed", "FAIL")
@@ -290,6 +328,10 @@ class ActionExecutor:
                     interrupt_id=new_id(), boot_id=self.boot_id, control_epoch=self.epoch
                 )
             )
-        if self.runner:
-            await self.runner
-        await asyncio.to_thread(self.journal.close)
+        try:
+            if self.runner:
+                await self.runner
+        finally:
+            await asyncio.to_thread(self.journal.close)
+            if self.close_backend is not None:
+                await self.close_backend()

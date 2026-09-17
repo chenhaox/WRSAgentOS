@@ -39,3 +39,13 @@ core 的工具生成 uv.lock 锁定 Zenoh 1.9.0、Pydantic 2.13.5、pytest 9.1.1
 另观察到直接使用共享 site-packages 时 `eclipse-zenoh` 为 1.10.1；项目启动器加载 `.local/deps` 的锁定 1.9.0。两者与 router 版本检查误报分开处理，不修改共享环境。后续验证通过项目启动器执行；真实硬件、模型 API 和音频不在本修复范围内。
 
 修复验证：指定解释器下新增 13 项版本检查单元测试及 2 项真实 router 集成测试通过。设置 RUST_LOG=info 执行当前完整单元集 92 passed、Zenoh 集成集 8 passed，0 failed / 0 errors / 0 skipped；两个示例、全仓库 Ruff、doctor 均 PASS，无阻塞检查。Mock 中断示例最终 SUCCEEDED，A 位于 C，旧动作拒绝 stale_epoch，迟到模型结果 STALE。实际命令、输出和依赖版本见 reports/router_version_fix.json、reports/router_fix_*.txt 和 reports/router_fix_doctor.json。共享环境未修改；WRS 连续虚拟动作、真实模型、音频和实机仍 UNVERIFIED。
+
+## M3：已验证的 Lite6 虚拟节点
+
+environments/wrs.py 在独立 Environment 进程使用真实 Lite6、wmij.interp_by_n 和 robot.fk，单所有者线程操作模型，Zenoh/控制循环读取带时间、单位、frame/source 的镜像状态。验证关节到位与 FK 变换一致，默认 headless，不构造硬件或查看器。
+
+capabilities / snapshot / observe / move_named_pose / status / cancel / hold / resume admission 已经真实跨进程验证。每次 FK 不可抢占：控制先撤权，等待在途 FK 返回后才确认停止；不对线程 future 执行 cancel 来冒充设备停车。没有控制器轨迹队列，controller_flush=false，stop_scope=virtual_fk_boundary。
+
+固定源码有 robots/end_effectors/ee_mixins.py 的模型 hold/release、manipulation/arm.py 的抓取辅助接口；本 Lite6 profile 未装配夹爪、有效目标几何与碰撞校验，因此 pick/place/物体 verify 明确 unsupported。未把模型挂接当接触成功。RRT/IK 与 GUI 未接入动作路径，实机始终拒绝。
+
+指定 venv 的科学依赖继承基础解释器 site-packages；core 不加载，WRS adapter 只读追加。完整科学依赖的干净安装仍未宣称可复现。测试/示例证据见 reports/m3.xml 和 reports/m3_example_cancel.txt。

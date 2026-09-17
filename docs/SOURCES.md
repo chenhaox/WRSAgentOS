@@ -125,3 +125,13 @@ Claude 客户端工具使用 tool_use/tool_result 等结构。Provider 适配负
 - https://www.python-httpx.org/advanced/timeouts/
 
 复用 AsyncClient，使用上下文关闭响应；本项目额外用 asyncio.timeout 限制整个响应预算。MockTransport 仅提供离线 HTTP 夹具，不作为真实 GLM 服务证据。
+
+## S19 · 本地参考源码审阅（2026-09-17）
+
+三份源码位于忽略的 .references，仅供搜索，不安装/导入、不作为 submodule：
+
+- RPent 902ac6beef674559787d77ec130ed5e6834fc61b，rpent/tools/toolkit.py：显式工具注册、取消请求与完成分离、安全边界检查；Apache-2.0。
+- HoloAgent ef14d3152ca6246d8ae64920694c6c74581d246c，agentic_robot/agentOS/holoagent_skills/scripts/list_skills.py：本地技能描述索引；顶层 Apache-2.0，内含第三方另行许可。
+- DimOS 29dfda595892dffb91c79f379eb44d1c737f9caf，dimos/agents/skill_result.py、dimos/agents/skills/speak_skill.py：结构化失败原因与独立语音资源；Apache-2.0。
+
+本项目仅提取上述机制，以普通函数和既有 ActionExecutor 实现；未直接复制或改编非平凡代码，不引入其继承树、MCP Runner、ROS/Ray 或依赖。HoloAgent 的 LFS post-checkout 被 Git clone protection 阻止，源码 checkout clean，未执行 hook/下载权重。

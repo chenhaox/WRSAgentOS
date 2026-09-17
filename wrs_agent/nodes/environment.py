@@ -1,4 +1,4 @@
-"""Register narrow services on the one Mock execution owner."""
+"""Register narrow services on the one execution owner."""
 
 from wrs_agent.schemas import ActionRequest, ControlRequest, Empty, IdRequest
 

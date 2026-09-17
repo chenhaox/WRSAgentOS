@@ -77,14 +77,18 @@ class LocalStack:
         tts=True,
         voice=False,
         deferred=False,
+        backend="mock",
     ):
+        if backend not in {"mock", "wrs_virtual"}:
+            raise ValueError("unsupported_backend")
+        self.backend = backend
         self.with_runtime, self.duration, self.fault = runtime, duration, fault
         self.with_tts, self.with_voice, self.deferred = tts, voice, deferred
         self.node_transports = {}
         self.node_suffixes, self.skill_bindings = load_bindings()
         self.port = port
         self.site = "local"
-        self.env_id = "mock-" + new_id()[:12]
+        self.env_id = backend + "-" + new_id()[:12]
         self.token = secrets.token_urlsafe(32)
         self.processes = []
         self.logs = []
@@ -151,6 +155,8 @@ class LocalStack:
             "--duration",
             self.duration,
         )
+        if role == "environment":
+            result.extend(["--backend", self.backend])
         if self.deferred and role == "runtime":
             result.append("--deferred-planner")
         if self.fault:

@@ -1,4 +1,4 @@
-"""Foreground supervision; Mock capability nodes only, hardware cannot be enabled."""
+"""Foreground supervision; Mock or WRS virtual capability nodes, hardware cannot be enabled."""
 
 import argparse
 import asyncio
@@ -46,11 +46,14 @@ async def node(args):
 
         transport = connect(target)
         if args.role in {"environment", "tts"}:
-            owner = (
-                make_mock_environment(journal, duration=args.duration, fault=args.fault)
-                if args.role == "environment"
-                else make_mock_tts(journal, duration=args.duration)
-            )
+            if args.role == "environment" and args.backend == "wrs_virtual":
+                from wrs_agent.environments.wrs import make_wrs_environment
+
+                owner = await make_wrs_environment(journal, duration=args.duration)
+            elif args.role == "environment":
+                owner = make_mock_environment(journal, duration=args.duration, fault=args.fault)
+            else:
+                owner = make_mock_tts(journal, duration=args.duration)
             register_actions(transport, owner)
         elif args.role == "runtime":
             tts = connect(args.env_id + suffixes["tts"])
@@ -105,6 +108,7 @@ async def main():
     parser.add_argument("--site", default="local")
     parser.add_argument("--env-id", default="arm01")
     parser.add_argument("--journal")
+    parser.add_argument("--backend", choices=["mock", "wrs_virtual"], default="mock")
     parser.add_argument("--duration", type=float, default=0.4)
     parser.add_argument(
         "--deferred-planner",
@@ -118,8 +122,13 @@ async def main():
     if args.duration <= 0 or args.duration > 30:
         parser.error("duration must be in (0, 30]")
     if args.role == "launch":
-        async with LocalStack(duration=args.duration, port=7447, voice=True) as stack:
-            print(f"ready Mock stack: {stack.endpoint} {stack.env_id}; Ctrl+C to stop", flush=True)
+        async with LocalStack(
+            duration=args.duration, port=7447, voice=True, backend=args.backend
+        ) as stack:
+            print(
+                f"ready {args.backend} stack: {stack.endpoint} {stack.env_id}; Ctrl+C to stop",
+                flush=True,
+            )
             await asyncio.Event().wait()
     else:
         await node(args)

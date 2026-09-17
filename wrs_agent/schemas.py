@@ -81,6 +81,7 @@ class ActionStatus(Boundary):
     action_id: Name
     state: State
     sequence: Counter = 0
+    progress: float = Field(default=0.0, ge=0, le=1)
     reason: Annotated[str, Field(max_length=240)] = ""
     verification: Literal["PENDING", "PASS", "FAIL", "INCONCLUSIVE"] = "PENDING"
 
@@ -106,6 +107,17 @@ class ControlReceipt(Boundary):
     phase: Literal["REJECTED", "STOPPING", "STOPPED", "UNKNOWN", "RESUMED"]
 
 
+class KinematicState(Boundary):
+    joints: Annotated[list[float], Field(min_length=6, max_length=6)]
+    joint_unit: Literal["rad"] = "rad"
+    tip_position: Annotated[list[float], Field(min_length=3, max_length=3)]
+    position_unit: Literal["m"] = "m"
+    frame_id: Literal["world"] = "world"
+    source: Literal["wrs_fk"] = "wrs_fk"
+    observed_at_ns: int = Field(gt=0)
+    valid: bool = True
+
+
 class WorldSnapshot(Boundary):
     boot_id: Name
     control_epoch: Counter
@@ -115,19 +127,22 @@ class WorldSnapshot(Boundary):
     held_object: Name | None = None
     objects: dict[Name, Name] = Field(default_factory=dict)
     pose: Name | None = None
+    kinematics: KinematicState | None = None
     facts: dict[Name, Scalar] = Field(default_factory=dict)
     active_action: Name | None
     stop_confirmed: bool
 
 
 class CapabilitySnapshot(Boundary):
-    backend: Literal["mock", "mock_tts"] = "mock"
+    backend: Literal["mock", "mock_tts", "wrs_virtual"] = "mock"
     resources: list[Name] = Field(default_factory=list)
     skills: list[Name]
     hardware: Literal[False] = False
     controlled_stop: bool = True
     controller_flush: bool = True
-    verification: Literal["virtual_state"] = "virtual_state"
+    verification: Literal["virtual_state", "wrs_fk"] = "virtual_state"
+    stop_scope: Literal["virtual_state", "virtual_fk_boundary"] = "virtual_state"
+    unsupported: dict[Name, str] = Field(default_factory=dict)
 
 
 class Step(Boundary):
