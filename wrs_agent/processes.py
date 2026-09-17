@@ -19,7 +19,8 @@ from wrs_agent.transport import Transport
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = Path(r"D:\code\venv312\.venv\Scripts\python.exe")
-ROUTER = ROOT / ".local/zenoh-1.9.0/zenohd.exe"
+ROUTER_VERSION = "1.9.0"
+ROUTER = ROOT / f".local/zenoh-{ROUTER_VERSION}/zenohd.exe"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -50,6 +51,19 @@ def python_command(*args):
     if Path(sys.executable).resolve() != PYTHON.resolve():
         raise RuntimeError(f"Required Python: {PYTHON}")
     return [str(PYTHON), "-X", "utf8", "-S", str(ROOT / "scripts/run.py"), *map(str, args)]
+
+
+def check_router_version():
+    output = subprocess.check_output(
+        [str(ROUTER), "--version"], timeout=5, creationflags=NO_WINDOW
+    ).decode("utf-8", errors="replace")
+    # RUST_LOG=info/debug adds a timestamped log before the standalone version line.
+    match = re.search(r"(?m)^zenohd v?(\S+)", output)
+    if match is None or match.group(1) != ROUTER_VERSION:
+        raise RuntimeError(
+            f"zenohd_version_mismatch: expected {ROUTER_VERSION}; "
+            f"router={ROUTER}; output={output.strip()!r}"
+        )
 
 
 class LocalStack:
@@ -108,9 +122,7 @@ class LocalStack:
         }
         config_path = self.directory / "router.json5"
         config_path.write_text(json.dumps(config), encoding="utf-8")
-        version = subprocess.check_output([str(ROUTER), "--version"], creationflags=NO_WINDOW)
-        if not version.startswith(b"zenohd v1.9.0 "):
-            raise RuntimeError("zenohd_version_mismatch")
+        check_router_version()
         process = self._spawn("router", [str(ROUTER), "-c", str(config_path)])
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:

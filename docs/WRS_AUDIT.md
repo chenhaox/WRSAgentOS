@@ -29,3 +29,13 @@ core 的工具生成 uv.lock 锁定 Zenoh 1.9.0、Pydantic 2.13.5、pytest 9.1.1
 下载与校验脚本为 scripts/install_router.ps1。
 
 本轮只证明 WRS 源码、导入与 FK 可用。M3 连续虚拟运动尚未实现；GLM、真实音频和实机全部 UNVERIFIED。CLI 只能选择 Mock 节点。
+
+## 2026-09-17：router 版本检查误报
+
+使用指定 Python 3.12.0 复核：本地 router 输出 `zenohd v1.9.0 built with rustc 1.93.0 (254b59607 2026-01-19)`；现有 ZIP 的 SHA256 与上述固定值一致。设置 `RUST_LOG=info` 或 `debug` 后，`--version` 会先向 stdout 写入带时间戳的 INFO 日志，然后才输出独立版本行。`LocalStack.start_router` 对整个输出执行 `startswith(b"zenohd v1.9.0 ")`，因此错误拒绝正确的二进制。
+
+复现命令：`$env:RUST_LOG = 'info'; & 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py examples/02_mock_interrupt.py`，修复前退出码 1，证据 `reports/router_version_before.txt`。决策：从独立版本行提取完整版本号并严格比较 1.9.0，保留继承的日志设置；真实不匹配时报告期望版本、二进制路径和实际输出，不放宽到任意版本。
+
+另观察到直接使用共享 site-packages 时 `eclipse-zenoh` 为 1.10.1；项目启动器加载 `.local/deps` 的锁定 1.9.0。两者与 router 版本检查误报分开处理，不修改共享环境。后续验证通过项目启动器执行；真实硬件、模型 API 和音频不在本修复范围内。
+
+修复验证：指定解释器下新增 13 项版本检查单元测试及 2 项真实 router 集成测试通过。设置 RUST_LOG=info 执行当前完整单元集 92 passed、Zenoh 集成集 8 passed，0 failed / 0 errors / 0 skipped；两个示例、全仓库 Ruff、doctor 均 PASS，无阻塞检查。Mock 中断示例最终 SUCCEEDED，A 位于 C，旧动作拒绝 stale_epoch，迟到模型结果 STALE。实际命令、输出和依赖版本见 reports/router_version_fix.json、reports/router_fix_*.txt 和 reports/router_fix_doctor.json。共享环境未修改；WRS 连续虚拟动作、真实模型、音频和实机仍 UNVERIFIED。
