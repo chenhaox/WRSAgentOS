@@ -4,11 +4,11 @@ import asyncio
 from collections import deque
 
 from wrs_agent.cache import PlanCache
-from wrs_agent.environments.api import Environment
+from wrs_agent.nodes.api import ActionProvider, action_request
 from wrs_agent.planner.api import PlanDecision, Planner, PlanRequest
 from wrs_agent.schemas import (
     TERMINAL,
-    ActionRequest,
+    ControlReceipt,
     ControlRequest,
     Plan,
     Step,
@@ -34,11 +34,14 @@ def validate_plan(plan, capabilities=None, bindings=None):
 class Runtime:
     def __init__(
         self,
-        nodes: dict[str, Environment],
+        nodes: dict[str, ActionProvider],
         bindings: dict[str, str],
         planner: Planner | None = None,
+        *,
+        registry=None,
     ):
         self.nodes, self.bindings, self.planner = nodes, bindings, planner
+        self.registry = registry
         self.task_id = new_id()
         self.revision = 0
         self.state, self.reason = "IDLE", ""
@@ -60,6 +63,7 @@ class Runtime:
     def snapshot(self):
         actions = dict(self.active_actions)
         return {
+            "nodes": self.registry.snapshot() if self.registry else {},
             "task_id": self.task_id,
             "revision": self.revision,
             "state": self.state,
@@ -147,16 +151,35 @@ class Runtime:
         self.planning = self._spawn(self._plan(request.goal, self.revision))
         return result
 
+    async def _state(self, node, *, control=False):
+        # Compatibility for existing in-process test providers; new providers use context.
+        if hasattr(node, "context"):
+            return await node.context(control=control)
+        return await node.snapshot(control=control)
+
+    async def _capabilities(self):
+        if self.registry:
+            await self.registry.refresh()
+        result = {}
+        for name, node in self.nodes.items():
+            if self.registry and not self.registry.snapshot().get(name, {}).get("ready"):
+                continue
+            result[name] = await node.capabilities()
+        return result
+
     async def _plan(self, goal, revision):
         was_running = self.state == "RUNNING"
         try:
-            worlds = {name: await node.snapshot(control=True) for name, node in self.nodes.items()}
-            capabilities = {name: await node.capabilities() for name, node in self.nodes.items()}
+            capabilities = await self._capabilities()
+            worlds = {
+                name: await self._state(self.nodes[name], control=True) for name in capabilities
+            }
             request = PlanRequest(
                 user_goal=goal,
                 world={n: w.model_dump() for n, w in worlds.items()},
                 skills=[
-                    spec.model_dump() for spec in lookup_skills(goal, capabilities, self.bindings)
+                    spec.model_dump(exclude={"node"})
+                    for spec in lookup_skills(goal, capabilities, self.bindings)
                 ],
             )
             cached = self.cache.lookup(goal, worlds, capabilities, self.bindings)
@@ -168,8 +191,8 @@ class Runtime:
             if revision != self.revision or self.closed:
                 self.planning_state = "STALE"
                 return
-            for name, node in self.nodes.items():
-                current = await node.snapshot(control=True)
+            for name in worlds:
+                current = await self._state(self.nodes[name], control=True)
                 old = worlds[name]
                 if (
                     current.boot_id != old.boot_id
@@ -212,8 +235,11 @@ class Runtime:
 
     async def _execute(self, plan, revision):
         try:
-            capabilities = {name: await node.capabilities() for name, node in self.nodes.items()}
+            capabilities = await self._capabilities()
             validate_plan(plan, capabilities, self.bindings)
+            if self.registry:
+                for step in plan.steps:
+                    self.registry.provider(step.skill)
         except Exception:
             if revision == self.revision:
                 self.state, self.reason = "FAILED", "capability_preflight_failed"
@@ -334,24 +360,24 @@ class Runtime:
 
     async def _attempt(self, step, node_name, revision, authority=None):
         node = self.nodes[node_name]
-        world = await node.snapshot()
+        if self.registry:
+            await self.registry.refresh()
+            if self.registry.provider(step.skill) != node_name:
+                raise ValueError("provider_binding_changed")
+        world = await self._state(node)
         if revision != self.revision or self.closed:
             return "STALE", None, world
         if authority is not None and (world.boot_id, world.control_epoch) != authority:
             return "STALE", None, world
         if world.admission != "OPEN":
             return "BLOCKED", None, world
-        action = ActionRequest(
-            action_id=new_id(),
+        action = action_request(
+            world,
+            step.skill,
+            step.args,
             task_id=self.task_id,
-            task_revision=revision,
-            boot_id=world.boot_id,
-            control_epoch=world.control_epoch,
-            lease_id=world.lease_id,
-            world_version=world.world_version,
-            skill=step.skill,
+            revision=revision,
             version=step.version,
-            args=step.args,
         )
         self.active_actions[step.step_id] = action.action_id
         try:
@@ -389,15 +415,29 @@ class Runtime:
             if self.active_actions.get(step.step_id) == action.action_id:
                 self.active_actions.pop(step.step_id)
 
+    async def _robot_controls(self, node_name):
+        if self.registry:
+            return self.registry.definitions[node_name]["type"] == "wrs"
+        return (await self.nodes[node_name].capabilities()).robot_controls
+
     async def _fence(self, node_name):
         node = self.nodes[node_name]
+        robot = await self._robot_controls(node_name)
         for _ in range(3):
-            world = await node.snapshot(control=True)
-            result = await node.hold(
-                ControlRequest(
-                    interrupt_id=new_id(), boot_id=world.boot_id, control_epoch=world.control_epoch
+            world = await self._state(node, control=True)
+            if not robot and world.active_action is None:
+                return ControlReceipt(
+                    accepted=world.stop_confirmed,
+                    control_epoch=world.control_epoch,
+                    phase="STOPPED" if world.stop_confirmed else "UNKNOWN",
                 )
+            request = ControlRequest(
+                interrupt_id=new_id(),
+                boot_id=world.boot_id,
+                control_epoch=world.control_epoch,
+                action_id=world.active_action if not robot else None,
             )
+            result = await (node.hold(request) if robot else node.cancel(request))
             if result.accepted:
                 return result
             if result.reason != "stale_control":
@@ -419,12 +459,16 @@ class Runtime:
         receipts = await asyncio.gather(
             *(self._fence(name) for name in self.nodes), return_exceptions=True
         )
-        wrs = receipts[list(self.nodes).index("wrs")]
-        if isinstance(wrs, Exception):
-            result.update({"accepted": False, "phase": "UNKNOWN"})
-        else:
-            result.update(wrs.model_dump())
-            result["accepted"] = all(not isinstance(r, Exception) for r in receipts)
+        accepted = all(not isinstance(r, Exception) and r.accepted for r in receipts)
+        phase = (
+            "UNKNOWN"
+            if not accepted
+            or any(not isinstance(r, Exception) and r.phase == "UNKNOWN" for r in receipts)
+            else "STOPPING"
+            if any(r.phase == "STOPPING" for r in receipts)
+            else "STOPPED"
+        )
+        result.update(accepted=accepted, phase=phase)
         return result
 
     async def replace(self, request: TaskControl):
@@ -451,7 +495,7 @@ class Runtime:
                 node = self.nodes[node_name]
                 async with asyncio.timeout(3):
                     while True:
-                        world = await node.snapshot(control=True)
+                        world = await self._state(node, control=True)
                         if revision != self.revision or self.closed:
                             return
                         if world.admission == "UNKNOWN":
@@ -459,6 +503,10 @@ class Runtime:
                         if world.stop_confirmed and world.active_action is None:
                             break
                         await asyncio.sleep(0.01)
+                if not await self._robot_controls(node_name):
+                    if world.admission != "OPEN":
+                        raise ValueError("provider_not_ready")
+                    continue
                 result = await node.resume(
                     ControlRequest(
                         interrupt_id=new_id(),

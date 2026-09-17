@@ -6,6 +6,7 @@ import time
 from collections import OrderedDict
 
 from wrs_agent.schemas import (
+    ActionContext,
     ActionReceipt,
     ActionRequest,
     ActionStatus,
@@ -90,6 +91,19 @@ class ActionExecutor:
             **self.world.snapshot(),
             stop_confirmed=self.stop_confirmed,
         )
+
+    def context(self):
+        state = self.snapshot().model_dump()
+        return ActionContext.model_validate({k: state[k] for k in ActionContext.model_fields})
+
+    def _finish_cancel(self):
+        # TTS cancellation ends one utterance. New work still needs a fresh epoch/lease.
+        if (
+            not self.capabilities().robot_controls
+            and self.admission == "HELD"
+            and self.stop_confirmed
+        ):
+            self.admission = "OPEN"
 
     def status(self, action_id):
         record = self.records.get(action_id)
@@ -182,6 +196,7 @@ class ActionExecutor:
             self._status(request.action_id, "CANCELLED", reason or "held_before_start")
             self.active = None
             self.stop_confirmed = self.admission != "UNKNOWN"
+            self._finish_cancel()
             await self._save(request.action_id)
         else:
             await self._execute(request)
@@ -256,6 +271,8 @@ class ActionExecutor:
             if self.status(aid).state in {"SUCCEEDED", "FAILED"}:
                 self.stop_confirmed = True
             self.active = None
+            if self.status(aid).state == "CANCELLED":
+                self._finish_cancel()
             with contextlib.suppress(Exception):
                 await self._save(aid)
             self.on_event(

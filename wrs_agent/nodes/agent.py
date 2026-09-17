@@ -4,6 +4,12 @@ from wrs_agent.schemas import Empty, GoalRequest, TaskControl, TaskRequest
 
 
 def register_runtime(transport, runtime):
+    async def nodes(payload):
+        Empty.model_validate(payload)
+        return await runtime.registry.refresh() if runtime.registry else {}
+
+    transport.register_handler("request/nodes", nodes)
+
     async def start(payload):
         return await runtime.start(TaskRequest.model_validate(payload))
 

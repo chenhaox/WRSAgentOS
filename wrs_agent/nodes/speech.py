@@ -21,7 +21,7 @@ def register_speech(bus, wrs, tts, agent_bus):
         processed[event.event_id] = (event, result)
         if disposition in {"hold", "cancel_tts"}:
             node = wrs if disposition == "hold" else tts
-            world = await node.snapshot(control=True)
+            world = await node.context(control=True)
             if disposition == "cancel_tts" and world.active_action is None:
                 result["effect"] = "no_active_tts"
             else:

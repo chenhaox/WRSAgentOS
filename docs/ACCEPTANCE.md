@@ -148,3 +148,25 @@ E：人工监督的实际机器人测试，必须另行 opt-in；不作为无人
 缓存示例实际 model_calls=1→1→2→3，第二次命中减少一次 Mock ModelClient/Planner 调用。另有原生 GLM HTTP 夹具三次任务只生成两次 HTTP 请求，全部动作仍走真实 Zenoh 和验证。未发送真实 GLM，因此不报告付费请求节省或云延迟。
 
 WRS 限制：headless FK 虚拟运动，固定模型单线程所有权；每个 FK 不可抢占，仅边界协作停止，没有控制器队列。pick/place/接触验证/碰撞规划/IK/RRT 动作链和实机均未验证或 unsupported。已有科学环境可运行，干净机器完整科学依赖重建未验证。真实 GLM 模型/用途授权尚未落实，流式输出、音频、硬件、双机保护与负载基准未验证。
+
+## System Structure Consolidation 验收（2026-09-17）
+
+命令：./scripts/run.ps1 scripts/verify.py --wrs。
+120 unit + 26 真实 Zenoh/Mock + 5 真实 WRS FK = **151 passed**，
+0 failed / errors / skipped；原 141 项保留，新增 10 项。
+01/02/04/05/09/10 示例、03 完成/取消两模式、Ruff、doctor 全部 PASS。
+证据：reports/consolidation_summary.json、acceptance.json、unit.xml、zenoh.xml、wrs.xml。
+
+新增测试 tests/unit/test_registry.py、tests/integration/test_system.py 覆盖：
+- 四节点身份/启动版本/ready、Vision 只声明、视图过期/离线/重启/错误身份与能力拒绝；
+- 配置中的 WRS provider 改名后，Runtime 执行与停止不依赖名称；
+- WRS/TTS 并行、查询不打断、Voice 局部取消和直控停止；
+- Agent 退出后直连仍有效；离线/held provider 使任务在任何分支副作用前拒绝；
+- 泛化 ActionContext 无物体字段、TTS 无 hold/resume、去重与重复取消；
+- 不订阅终态也能按 ID 恢复状态，丢提交回执后查询补偿且只执行一次；
+- Runtime 控制通道不调用普通 capabilities 查询。
+
+WRS 仍仅验证 Lite6 FK 虚拟运动、停止边界和准入；没有新增机器人能力。
+GLM 仍仅离线 HTTP 夹具；没有真实调用（账号模型/适用服务授权未落实）。
+真实 ASR/TTS/Vision/硬件/双机 ACL 未验证。没有推进 M6/M7/M8 功能。
+缓存算法未改，05 仍为 Mock model_calls 1→1→2→3。

@@ -118,31 +118,46 @@ class KinematicState(Boundary):
     valid: bool = True
 
 
-class WorldSnapshot(Boundary):
+class ActionContext(Boundary):
     boot_id: Name
     control_epoch: Counter
     world_version: Counter
     lease_id: Name
     admission: Literal["OPEN", "HELD", "UNKNOWN"]
-    held_object: Name | None = None
-    objects: dict[Name, Name] = Field(default_factory=dict)
-    pose: Name | None = None
-    kinematics: KinematicState | None = None
     facts: dict[Name, Scalar] = Field(default_factory=dict)
     active_action: Name | None
     stop_confirmed: bool
 
 
+class WorldSnapshot(ActionContext):
+    held_object: Name | None = None
+    objects: dict[Name, Name] = Field(default_factory=dict)
+    pose: Name | None = None
+    kinematics: KinematicState | None = None
+
+
 class CapabilitySnapshot(Boundary):
-    backend: Literal["mock", "mock_tts", "wrs_virtual"] = "mock"
+    backend: Name = "mock"
     resources: list[Name] = Field(default_factory=list)
     skills: list[Name]
+    robot_controls: bool = True
     hardware: Literal[False] = False
     controlled_stop: bool = True
     controller_flush: bool = True
-    verification: Literal["virtual_state", "wrs_fk"] = "virtual_state"
-    stop_scope: Literal["virtual_state", "virtual_fk_boundary"] = "virtual_state"
+    verification: Name = "virtual_state"
+    stop_scope: Name = "virtual_state"
     unsupported: dict[Name, str] = Field(default_factory=dict)
+
+
+class NodeInfo(Boundary):
+    node_id: Name
+    node_type: Literal["agent", "wrs", "tts", "voice", "vision"]
+    boot_id: Name | None = None
+    capabilities: list[Name] = Field(default_factory=list, max_length=64)
+    skills: list[Name] = Field(default_factory=list, max_length=64)
+    resources: list[Name] = Field(default_factory=list, max_length=32)
+    ready: bool = False
+    health: Literal["ready", "held", "unknown", "offline", "stale", "unsupported"] = "offline"
 
 
 class Step(Boundary):

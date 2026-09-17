@@ -135,3 +135,8 @@ Claude 客户端工具使用 tool_use/tool_result 等结构。Provider 适配负
 - DimOS 29dfda595892dffb91c79f379eb44d1c737f9caf，dimos/agents/skill_result.py、dimos/agents/skills/speak_skill.py：结构化失败原因与独立语音资源；Apache-2.0。
 
 本项目仅提取上述机制，以普通函数和既有 ActionExecutor 实现；未直接复制或改编非平凡代码，不引入其继承树、MCP Runner、ROS/Ray 或依赖。HoloAgent 的 LFS post-checkout 被 Git clone protection 阻止，源码 checkout clean，未执行 hook/下载权重。
+
+结构整理补充审阅（同上固定提交与许可证）：RPent
+rpent/utils/rpc/client_utils.py 的 health/ready 探测及会话隔离；
+DimOS dimos/core/module.py 的 SkillInfo/lifecycle、core/transport.py 的 RPC/流边界；
+HoloAgent 上述脚本的描述索引。只提取小机制，没有代码复制或新增运行依赖。

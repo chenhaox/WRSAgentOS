@@ -4,6 +4,50 @@
 
 技能由 `configs/bindings.toml` 显式绑定执行节点。Runtime 按依赖和资源调度；WRS 只执行机器人技能，TTS 自己管理播报。Voice 可直接取消 TTS 或停止 WRS；查询和 VAD 不停止机械臂。模型等待不会占用控制路径。
 
+日常使用只需要两个入口：`System` 连接节点，`step` 描述技能和依赖：
+
+```python
+import asyncio
+from wrs_agent import System, step
+
+async def main():
+    async with System.local() as system:  # 真 Zenoh + 独立 Mock 节点
+        picked = step("pick", object="A")
+        placed = step("place", object="A", target="B", after=picked)
+        await system.start(
+            step("speak", text="我正在处理。"),  # 与抓取并行
+            picked, placed,
+            step("verify", object="A", target="B", after=placed),
+        )
+        print((await system.wait())["state"])
+
+asyncio.run(main())
+```
+
+`start` 快速返回，`wait` 等待任务结果；`status`/`watch` 只读进度。
+直接测试某项能力可用 `action = await system.action("speak", text="你好")`，
+再调用 `action.status()`、`action.wait()` 或 `action.cancel()`。
+调用端不需要构造 ID、epoch 和授权。直接动作仍经过节点权限、资源与验证检查。
+`System.local(backend="wrs_virtual")` 切换到真实 WRS 虚拟 FK，不连接硬件。
+
+`await system.nodes()` 直接查询配置中的 node_id/type/boot_id、技能、能力、资源和 ready。
+视图超过两秒会标 stale，执行前复查；离线/未就绪不自动切换到别的执行端。
+Skill Registry 描述技能，Node Registry 描述当前可用的执行者；配置才决定绑定，
+Planner 只提出技能。V1 capability 名沿用技能标识（如 pick），没有另一套同义命名表。
+agent/wrs/tts/voice 已运行；vision 只有 disabled 声明，不伪造观测。
+
+节点无需共同继承基类。通用 ActionClient 提供 context/submit/status/cancel；
+RobotClient 额外提供 snapshot/hold/resume。TTS 没有 hold/resume 服务；
+取消只结束指定播报，确认结束后新请求可用新授权开始，不续播旧内容。
+旧 environments.api 导入与只读 snapshot 保留兼容，核心逻辑只有一份。
+
+现有 Zenoh 前缀保持 wrs/v1/{site}/{target}（target 由节点配置 suffix 确定）。
+精确 Query：request/node/{node_id}、request/action/context、request/action/status；
+Action：request/action/submit、request/control/cancel；Event：events/action。
+WRS 另有 request/snapshot、request/control/hold|resume。Agent 提供 request/task/*
+及 request/nodes；Voice 直接使用目标节点的控制服务。旧 env_id 字段保持线协议兼容。
+
+
 运行环境固定为 `D:\code\venv312\.venv\Scripts\python.exe`（3.12.0）。`scripts/run.ps1` 使用该解释器和项目 `.local/deps`，不修改共享虚拟环境。
 
 在本目录的 PowerShell 中运行：
@@ -12,7 +56,7 @@
 git submodule update --init --recursive
 ./scripts/bootstrap.ps1
 ./scripts/install_router.ps1
-./scripts/run.ps1 examples/01_zenoh_roundtrip.py
+./scripts/run.ps1 examples/10_system_nodes.py
 ./scripts/run.ps1 examples/02_mock_interrupt.py
 ./scripts/run.ps1 scripts/verify.py
 ```
@@ -25,7 +69,7 @@ git submodule update --init --recursive
 
 在 IDE 中运行时，将脚本设为 `scripts/run.py`、参数设为 `examples/02_mock_interrupt.py`、解释器选项设为 `-X utf8 -S`，工作目录设为仓库根目录。这会加载项目锁定依赖；仅选择同一个 Python 而直接运行示例，仍可能加载共享环境中其他版本的包。router 版本检查支持 `RUST_LOG=info/debug` 产生的前置日志，真实版本不匹配时会显示期望版本、路径和实际输出。
 
-第二个示例演示并行动作、挂起的 Mock 模型等待、只取消 TTS、持物停止、拒绝旧动作/旧模型结果，以及重新规划到 C。结束时清理自己启动的进程。前台持续运行用 `./scripts/run.ps1 -m wrs_agent launch`，Ctrl+C 停止。
+10_system_nodes 演示四个独立节点并行、查询不打断、Voice 直连取消 TTS 与停止 WRS。输入是明确标注的结构化事件回放；不是 ASR，也不是云模型理解结果。02_mock_interrupt 进一步演示并行动作、挂起的 Mock 模型等待、只取消 TTS、持物停止、拒绝旧动作/旧模型结果，以及重新规划到 C。结束时清理自己启动的进程。前台持续运行用 `./scripts/run.ps1 -m wrs_agent launch`，Ctrl+C 停止。
 
 已通过单元、真实 Zenoh/Mock 和真实 WRS FK 节点测试、示例、Ruff 和 doctor；各层级的最新数量与命令见 docs/ACCEPTANCE.md。GLM 为离线 HTTP 夹具，不是真实云服务验收。verify.py 会在本地 reports/ 生成验收结果。开发助手指令、执行计划、IDE 配置和机器报告保留本地，不提交远程。
 
@@ -35,7 +79,7 @@ git submodule update --init --recursive
 - Query：能力、状态等短请求；控制服务有独立有界入口。
 - Action：快速 ACCEPTED，随后进度/终态、按 ID 查询和取消；WRS/TTS 共用同一合同。
 
-每节点最多一个资源动作，最多 12 步任务、16 项追加任务、4096 条会话动作/控制记录；达到容量明确拒绝，不删除去重历史再重放。动作 ID、任务 revision、节点 boot_id/epoch、短期授权和停止确认各自独立。
+默认每个动作节点最多一个冲突资源动作，最多 12 步任务、16 项追加任务、4096 条会话动作/控制记录；达到容量明确拒绝，不删除去重历史再重放。动作 ID、任务 revision、节点 boot_id/epoch、短期授权和停止确认各自独立。
 
 默认只连接回环地址，关闭发现；凭据由启动器生成，经环境变量传给自己的子进程，不靠 source/category/节点名称授予权限。该配置仅用于受信本机 Mock/WRS 虚拟节点，远程身份绑定与 ACL 尚未实现。网络拥塞/查询丢失返回错误或超时，不自动重发物理动作。
 

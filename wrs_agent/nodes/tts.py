@@ -14,5 +14,10 @@ def make_mock_tts(journal_path, *, duration=0.4):
         perform=perform,
         skills={"speak"},
         backend="mock_tts",
+        capabilities_extra={
+            "robot_controls": False,
+            "controller_flush": False,
+            "controlled_stop": False,
+        },
         duration=duration,
     )

@@ -1,8 +1,34 @@
-# Explicit logical node -> unique endpoint suffix. No automatic discovery.
+# Static provider binding. Skill descriptions do not choose endpoints.
 [nodes.wrs]
+type = "wrs"
 suffix = ""
+actions = true
+enabled = true
+
 [nodes.tts]
+type = "tts"
 suffix = "-tts"
+actions = true
+enabled = true
+
+[nodes.agent]
+type = "agent"
+suffix = ""
+actions = false
+enabled = true
+
+[nodes.voice]
+type = "voice"
+suffix = "-voice"
+actions = false
+enabled = true
+
+# Declaration only: there is no Vision process or fabricated observation.
+[nodes.vision]
+type = "vision"
+suffix = "-vision"
+actions = false
+enabled = false
 
 [skills]
 observe = "wrs"

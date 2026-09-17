@@ -13,7 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from wrs_agent.bindings import load_bindings
+from wrs_agent.bindings import load_bindings, load_nodes
 from wrs_agent.schemas import new_id
 from wrs_agent.transport import Transport
 
@@ -80,6 +80,7 @@ class LocalStack:
         backend="mock",
         model_provider="mock",
         live_model=False,
+        bindings=None,
     ):
         if backend not in {"mock", "wrs_virtual"}:
             raise ValueError("unsupported_backend")
@@ -90,7 +91,16 @@ class LocalStack:
         self.with_runtime, self.duration, self.fault = runtime, duration, fault
         self.with_tts, self.with_voice, self.deferred = tts, voice, deferred
         self.node_transports = {}
-        self.node_suffixes, self.skill_bindings = load_bindings()
+        self.bindings_path = Path(bindings).resolve() if bindings else None
+        self.definitions, self.skill_bindings = load_nodes(self.bindings_path)
+        self.node_suffixes, _ = load_bindings(self.bindings_path)
+        self.roles = {}
+        for name, definition in self.definitions.items():
+            if definition["enabled"]:
+                role = definition["type"]
+                if role in self.roles:
+                    raise ValueError("one_node_per_role_in_local_profile")
+                self.roles[role] = name
         self.port = port
         self.site = "local"
         self.env_id = backend + "-" + new_id()[:12]
@@ -160,6 +170,10 @@ class LocalStack:
             "--duration",
             self.duration,
         )
+        node_type = {"environment": "wrs", "runtime": "agent"}.get(role, role)
+        result.extend(["--node-id", self.roles[node_type]])
+        if self.bindings_path:
+            result.extend(["--bindings", str(self.bindings_path)])
         if role == "environment":
             result.extend(["--backend", self.backend])
         if role == "runtime" and self.model_provider == "glm":
@@ -185,29 +199,47 @@ class LocalStack:
         try:
             await asyncio.to_thread(self.start_router)
             self._spawn("environment", self.node_command("environment"))
-            self.transport = Transport(self.endpoint, self.site, self.env_id, self.token, "input")
+            self.transport = Transport(
+                self.endpoint,
+                self.site,
+                self.env_id + self.definitions[self.roles["wrs"]]["suffix"],
+                self.token,
+                "input",
+            )
             await self._ready("request/capabilities")
-            self.node_transports["wrs"] = self.transport
+            self.node_transports[self.roles["wrs"]] = self.transport
             if self.with_tts:
                 self._spawn("tts", self.node_command("tts"))
                 tts_bus = Transport(
                     self.endpoint,
                     self.site,
-                    self.env_id + self.node_suffixes["tts"],
+                    self.env_id + self.node_suffixes[self.roles["tts"]],
                     self.token,
                     "input",
                 )
-                self.node_transports["tts"] = tts_bus
+                self.node_transports[self.roles["tts"]] = tts_bus
                 await self._ready("request/capabilities", tts_bus)
             if self.with_runtime:
                 self._spawn("runtime", self.node_command("runtime"))
-                await self._ready("request/task/status")
+                agent_bus = Transport(
+                    self.endpoint,
+                    self.site,
+                    self.env_id + self.definitions[self.roles["agent"]]["suffix"],
+                    self.token,
+                    "input",
+                )
+                self.node_transports[self.roles["agent"]] = agent_bus
+                await self._ready("request/task/status", agent_bus)
             if self.with_voice:
                 self._spawn("voice", self.node_command("voice"))
                 voice_bus = Transport(
-                    self.endpoint, self.site, self.env_id + "-voice", self.token, "input"
+                    self.endpoint,
+                    self.site,
+                    self.env_id + self.definitions[self.roles["voice"]]["suffix"],
+                    self.token,
+                    "input",
                 )
-                self.node_transports["voice"] = voice_bus
+                self.node_transports[self.roles["voice"]] = voice_bus
                 await self._ready("request/health", voice_bus)
             return self
         except BaseException:
@@ -218,9 +250,9 @@ class LocalStack:
         if self.transport:
             # Graceful node shutdown uses the independent control lane.
             for role, bus in [
-                ("voice", self.node_transports.get("voice")),
-                ("runtime", self.transport if self.with_runtime else None),
-                ("tts", self.node_transports.get("tts")),
+                ("voice", self.node_transports.get(self.roles.get("voice"))),
+                ("runtime", self.node_transports.get(self.roles.get("agent"))),
+                ("tts", self.node_transports.get(self.roles.get("tts"))),
                 ("environment", self.transport),
             ]:
                 if bus is not None:

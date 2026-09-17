@@ -34,6 +34,7 @@ def main():
         ("glm_fixture", ["examples/04_glm_task.py", "--dry-run"]),
         ("skill_library", ["examples/09_skill_library.py"]),
         ("plan_cache", ["examples/05_cache_reuse.py"]),
+        ("system_nodes", ["examples/10_system_nodes.py"]),
         ("lint", ["-m", "ruff", "check", "wrs_agent", "tests", "examples", "scripts"]),
         (
             "doctor",

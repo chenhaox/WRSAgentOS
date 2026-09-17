@@ -32,7 +32,7 @@ class SpeakArgs(Boundary):
 
 class SkillSpec(Boundary):
     name: Name
-    node: Name
+    node: Name  # Legacy default role; deployment binding lives in configs/bindings.toml.
     version: int = 1
     description: str
     aliases: list[str] = Field(default_factory=list)
