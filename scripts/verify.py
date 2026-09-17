@@ -27,6 +27,7 @@ def main():
         ),
         ("roundtrip", ["examples/01_zenoh_roundtrip.py"]),
         ("parallel_interrupt", ["examples/02_mock_interrupt.py"]),
+        ("glm_fixture", ["examples/04_glm_task.py", "--dry-run"]),
         ("lint", ["-m", "ruff", "check", "wrs_agent", "tests", "examples", "scripts"]),
         ("doctor", ["scripts/doctor.py", "--probe-wrs", "--output", "reports/doctor.json"]),
     ]
@@ -62,7 +63,7 @@ def main():
         print(f"{name}: {status}", flush=True)
     for test_id, reason in {
         "wrs_virtual_runtime": "Import/FK only; continuous virtual Action adapter is M3.",
-        "glm_live": "No account/model configured; deferred MockClient tested, no paid call.",
+        "glm_live": "GLM HTTP fixtures only; no account model/use authorization, no live call.",
         "audio_live": "Voice replay and Mock TTS only; microphone/ASR/audible output untested.",
         "vision_node": "No independent Vision process in this minimum increment.",
         "hardware": "Hardware backend cannot be selected.",

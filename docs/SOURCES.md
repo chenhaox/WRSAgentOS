@@ -109,3 +109,19 @@ Claude 客户端工具使用 tool_use/tool_result 等结构。Provider 适配负
 `https://docs.astral.sh/uv/concepts/projects/dependencies/`
 
 用于 core、开发、GLM、语音等依赖分组及可复现安装。锁文件由工具生成，不把计划文本中的占位值当成可用锁文件。
+
+## S17 · 国内 Coding Plan、用途和独立 TTS（2026-09-17 核对）
+
+- https://docs.bigmodel.cn/cn/coding-plan/quick-start
+- https://docs.bigmodel.cn/cn/terms/subscription-agreement
+- https://docs.bigmodel.cn/cn/guide/models/sound-and-video/glm-tts
+- https://docs.bigmodel.cn/cn/guide/capabilities/function-calling
+
+国内 Coding Plan 有专用 /api/coding/paas/v4 路径；订阅协议限制自建应用/机器人直接使用，不能靠兼容协议或身份伪装扩大范围。TTS 使用 /api/paas/v4/audio/speech。工具协议的 tool_choice 当前只支持 auto。文档示例模型名不构成用户账户可用性证据。
+
+## S18 · HTTPX 异步客户端与超时
+
+- https://www.python-httpx.org/async/
+- https://www.python-httpx.org/advanced/timeouts/
+
+复用 AsyncClient，使用上下文关闭响应；本项目额外用 asyncio.timeout 限制整个响应预算。MockTransport 仅提供离线 HTTP 夹具，不作为真实 GLM 服务证据。
