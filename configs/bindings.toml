@@ -1,0 +1,13 @@
+# Explicit logical node -> unique endpoint suffix. No automatic discovery.
+[nodes.wrs]
+suffix = ""
+[nodes.tts]
+suffix = "-tts"
+
+[skills]
+observe = "wrs"
+move_named_pose = "wrs"
+pick = "wrs"
+place = "wrs"
+verify = "wrs"
+speak = "tts"

@@ -1,0 +1,22 @@
+.local/
+.venv*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.env
+!.env.example
+
+# Local agent instructions, execution notes and generated machine reports.
+[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
+[Cc][Oo][Dd][Ee][Xx]_[Ss][Tt][Aa][Rr][Tt]_[Pp][Rr][Oo][Mm][Pp][Tt].[Mm][Dd]
+PLANS.md
+docs/EXECPLAN_V1.md
+reports/
+.idea/
+.vscode/
+.codex/
+.agents/
+.env.*
+!.env.example

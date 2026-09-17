@@ -1,0 +1,53 @@
+# 待实现的应用配置合同；不是 Zenoh 原生配置，不能直接交给 zenoh.Config。
+[app]
+site = "lab"
+env_id = "arm01"
+schema_version = 1
+
+[zenoh]
+endpoints = ["tcp/127.0.0.1:7447"]
+mode = "client"
+allow_discovery = false
+allow_remote_control = false
+# 由实现转换成锁定 Zenoh 版本支持的配置；外网/双机配置另行验证。
+
+[environment]
+backend = "mock"
+wrs_root = "third_party/wrs"
+allow_hardware = false
+
+[planner]
+backend = "model"
+provider = "mock"
+model_env = "GLM_MODEL"
+base_url_env = "GLM_BASE_URL"
+api_key_env = "GLM_API_KEY"
+live_model = false
+request_timeout_s = 20.0
+max_model_rounds = 3
+max_plan_steps = 12
+# 超时和预算只是建议初值，不是已验证性能指标。
+
+[runtime]
+max_manipulation_actions = 1
+ordinary_queue_capacity = 64
+control_queue_capacity = 16
+recovery_attempts = 1
+
+[cache]
+mode = "validated_templates"
+semantic_mode = "shadow"
+database = ".local/wrs_agent.sqlite3"
+max_entries = 256
+
+[speech]
+backend = "replay"
+live_microphone = false
+save_audio = false
+upload_audio = false
+assets_dir = ".local/speech_models"
+
+[logging]
+directory = ".local/logs"
+redact_secrets = true
+retain_raw_provider_output = false
