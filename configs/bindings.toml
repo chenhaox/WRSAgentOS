@@ -1,4 +1,5 @@
-# Static provider binding. Skill descriptions do not choose endpoints.
+# launch() starts enabled nodes; skills bind to explicit node IDs.
+# Python still owns process supervision, endpoint selection, and credentials.
 [nodes.wrs]
 type = "wrs"
 suffix = ""

@@ -4,9 +4,13 @@ import asyncio
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 from wrs_agent.actions import ActionExecutor, ExecutionUnknown
+from wrs_agent.schemas import RobotData
+from wrs_agent.skills import SKILLS
 
 ROOT = Path(__file__).resolve().parents[2]
 POSES = {
@@ -75,11 +79,11 @@ class VirtualState:
         self.pose = "home"
 
     def snapshot(self):
-        return {
-            "pose": self.pose,
-            "kinematics": dict(self.kinematics),
-            "facts": {"calibration": "wrs2-lite6-v1", "collision_checked": False},
-        }
+        return RobotData(
+            pose=self.pose,
+            kinematics=dict(self.kinematics),
+            facts={"calibration": "wrs2-lite6-v1", "collision_checked": False},
+        )
 
 
 async def make_wrs_environment(journal_path, *, duration=0.4, allow_hardware=False):
@@ -101,7 +105,7 @@ async def make_wrs_environment(journal_path, *, duration=0.4, allow_hardware=Fal
         owner.shutdown(wait=False)
         raise
 
-    async def advance(skill, args, stop, progress):
+    async def advance(skill, state, args, stop, progress):
         try:
             if skill == "observe":
                 state.kinematics = await call(model.read)
@@ -140,10 +144,12 @@ async def make_wrs_environment(journal_path, *, duration=0.4, allow_hardware=Fal
     executor = ActionExecutor(
         journal_path,
         state=state,
-        perform=None,
-        advance=advance,
         close_backend=close,
-        skills={"observe", "move_named_pose"},
+        skills={
+            name: replace(SKILLS[name], handler=partial(advance, name))
+            for name in ("observe", "move_named_pose")
+        },
+        duration=0,  # This backend advances itself; no Mock delay before motion.
         backend="wrs_virtual",
         capabilities_extra={
             "verification": "wrs_fk",

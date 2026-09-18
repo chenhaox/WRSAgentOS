@@ -1,0 +1,12 @@
+[nodes.wrs]
+type = "wrs"
+suffix = ""
+actions = true
+enabled = true
+
+[skills]
+observe = "wrs"
+move_named_pose = "wrs"
+pick = "wrs"
+place = "wrs"
+verify = "wrs"

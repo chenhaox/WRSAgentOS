@@ -1,9 +1,10 @@
 import asyncio
+from dataclasses import replace
 
 import pytest
 from conftest import action, control, eventually
 
-from wrs_agent.environments.mock import make_mock_environment
+from wrs_agent.env.mock import make_mock_environment
 from wrs_agent.schemas import TERMINAL
 
 
@@ -143,5 +144,50 @@ async def test_expired_grant_and_old_revision_cannot_execute(make_env):
         old = action(env, skill="place", args={"object": "A", "target": "B"}, task_revision=1)
         assert (await env.submit(old)).reason == "stale_revision"
         assert env.executions == 1
+    finally:
+        await env.close()
+
+
+async def test_snapshot_flood_does_not_issue_or_evict_execution_permission(make_env):
+    env = make_env(duration=0.01)
+    try:
+        for _ in range(100):
+            assert "lease_id" not in env.snapshot().model_dump()
+        assert not env.leases
+        request = action(env)
+        grants = dict(env.leases)
+        for _ in range(100):
+            assert env.snapshot().data.held_object is None
+        assert env.leases == grants
+        assert (await env.submit(request)).accepted
+        result = await eventually(
+            lambda: env.status(request.action_id), lambda s: s.state == "SUCCEEDED"
+        )
+        assert result.verification == "PASS" and env.executions == 1
+    finally:
+        await env.close()
+
+
+async def test_progress_events_contain_state_without_issuing_permission(make_env):
+    env = make_env()
+    events = []
+
+    async def advance(state, args, stop, progress):
+        for index in range(100):
+            progress(index / 100)
+        return True  # Unit fixture for an observe action; no physical backend.
+
+    env.skills["observe"] = replace(env.skills["observe"], handler=advance)
+    env.on_event = lambda key, payload: events.append((key, payload))
+    try:
+        request = action(env, "observe", {})
+        grants = dict(env.leases)
+        assert (await env.submit(request)).accepted
+        await env.runner
+        worlds = [payload for key, payload in events if key == "state/world"]
+        assert len(worlds) == 100
+        assert all("lease_id" not in payload for payload in worlds)
+        assert env.leases == grants
+        assert env.status(request.action_id).state == "SUCCEEDED"
     finally:
         await env.close()

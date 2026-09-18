@@ -17,11 +17,16 @@ def register_runtime(transport, runtime):
         Empty.model_validate(payload)
         return runtime.snapshot()
 
+    def control_request(payload):
+        if not payload.get("task_id"):
+            raise ValueError("task_id_required")
+        return TaskControl.model_validate(payload)
+
     async def hold(payload):
-        return await runtime.hold(TaskControl.model_validate(payload))
+        return await runtime.hold(control_request(payload))
 
     async def replace(payload):
-        return await runtime.replace(TaskControl.model_validate(payload))
+        return await runtime.replace(control_request(payload))
 
     async def goal(payload):
         return await runtime.goal(GoalRequest.model_validate(payload))

@@ -4,7 +4,6 @@ import subprocess
 import pytest
 from conftest import eventually
 
-from wrs_agent.environments.api import ActionClient
 from wrs_agent.processes import NO_WINDOW, ROOT, LocalStack, python_command
 from wrs_agent.schemas import ActionRequest, Plan, Step, new_id
 from wrs_agent.transport import RemoteError, Transport, decode
@@ -13,7 +12,7 @@ pytestmark = pytest.mark.zenoh
 
 
 async def make_action(client, skill, args):
-    world = await client.snapshot()
+    world = await client.context()
     return ActionRequest(
         action_id=new_id(),
         task_id="direct",
@@ -29,9 +28,9 @@ async def make_action(client, skill, args):
 
 async def test_parallel_nodes_dependency_and_resources():
     async with LocalStack(duration=0.25) as stack:
-        bus = stack.transport
-        wrs = ActionClient(bus)
-        tts = ActionClient(stack.node_transports["tts"])
+        bus = stack.system.clients["wrs"].transport
+        wrs = stack.system.clients["wrs"]
+        tts = stack.system.clients["tts"]
         plan = Plan(
             steps=[
                 Step(step_id="speech", skill="speak", args={"text": "working"}),
@@ -56,28 +55,28 @@ async def test_parallel_nodes_dependency_and_resources():
         assert first == await bus.request("request/task/start", request)
 
         async def concurrent():
-            return await wrs.snapshot(), await tts.snapshot()
+            return await wrs.snapshot(), await tts.context()
 
         both = await eventually(concurrent, lambda pair: all(w.active_action for w in pair))
-        assert both[0].objects["A"] == "table"  # dependent pick has not run
+        assert both[0].data.objects["A"] == "table"  # dependent pick has not run
         await eventually(
             lambda: bus.request("request/task/status", {}),
             lambda s: s["state"] in {"SUCCEEDED", "FAILED", "UNKNOWN"},
         )
         result = await bus.request("request/task/status", {})
         assert result["state"] == "SUCCEEDED", result
-        assert (await wrs.snapshot()).objects["A"] == "B"
-        assert (await tts.snapshot()).facts["completed"] == 1
+        assert (await wrs.snapshot()).data.objects["A"] == "B"
+        assert (await tts.snapshot()).data.completed == 1
         assert (await bus.request("request/health", {}))["executions"] == 4
         assert result["planner_calls"] == 0  # progress does not invoke a model
     assert all(p.poll() is not None for p in stack.processes)
 
 
 async def test_hung_model_direct_voice_cancel_and_stop():
-    async with LocalStack(duration=3, voice=True, deferred=True) as stack:
-        bus, voice = stack.transport, stack.node_transports["voice"]
-        wrs = ActionClient(bus)
-        tts = ActionClient(stack.node_transports["tts"])
+    async with LocalStack(duration=3, deferred=True) as stack:
+        bus, voice = stack.system.clients["wrs"].transport, stack.system._transports["voice"]
+        wrs = stack.system.clients["wrs"]
+        tts = stack.system.clients["tts"]
         plan = Plan(
             steps=[
                 Step(step_id="pick", skill="pick", args={"object": "A"}),
@@ -98,7 +97,7 @@ async def test_hung_model_direct_voice_cancel_and_stop():
         ids = state["active_actions"]
         await eventually(lambda: wrs.status(ids["pick"]), lambda s: s.state == "RUNNING")
         await eventually(lambda: tts.status(ids["speech"]), lambda s: s.state == "RUNNING")
-        before = await wrs.snapshot()
+        before = await wrs.context()
         await bus.request("request/task/goal", {"request_id": new_id(), "goal": "next goal"})
         await eventually(
             lambda: bus.request("request/task/status", {}), lambda s: s["planner_calls"] == 1
@@ -147,9 +146,9 @@ async def test_hung_model_direct_voice_cancel_and_stop():
 
 
 async def test_dedup_missed_terminal_and_authentication():
-    async with LocalStack(runtime=False, duration=0.08) as stack:
-        wrs = ActionClient(stack.transport)
-        tts = ActionClient(stack.node_transports["tts"])
+    async with LocalStack(bindings="tests/fixtures/actions.toml", duration=0.08) as stack:
+        wrs = stack.system.clients["wrs"]
+        tts = stack.system.clients["tts"]
         for client, skill, args in [
             (wrs, "pick", {"object": "A"}),
             (tts, "speak", {"text": "hello"}),
@@ -185,10 +184,10 @@ async def test_dedup_missed_terminal_and_authentication():
 
 
 async def test_real_pubsub_timeout_cancel_callback_threads_and_duplicate_owner():
-    async with LocalStack(runtime=False, tts=False) as stack:
-        bus = stack.transport
+    async with LocalStack(bindings="configs/robot.toml") as stack:
+        bus = stack.system.clients["wrs"].transport
         events = bus.subscribe("events/action")
-        wrs = ActionClient(bus)
+        wrs = stack.system.clients["wrs"]
         action = await make_action(wrs, "pick", {"object": "A"})
         await wrs.submit(action)
         sample = await eventually(events.try_recv, lambda s: s is not None)
@@ -203,7 +202,7 @@ async def test_real_pubsub_timeout_cancel_callback_threads_and_duplicate_owner()
                 "tests/fixtures/slow_query.py", stack.endpoint, stack.site, stack.env_id
             ),
         )
-        await stack._ready("request/test/slow_status")
+        await stack._wait_ready(bus, "request/test/slow_status")
         waiting = asyncio.create_task(bus.request("request/test/slow", {}, timeout=10))
         await eventually(
             lambda: bus.request("request/test/slow_status", {}, control=True),
@@ -216,20 +215,20 @@ async def test_real_pubsub_timeout_cancel_callback_threads_and_duplicate_owner()
         await asyncio.to_thread(slow.wait, timeout=3)
         duplicate = await asyncio.to_thread(
             subprocess.run,
-            stack.node_command("environment"),
+            stack.node_command("wrs"),
             cwd=ROOT,
             capture_output=True,
             timeout=5,
             creationflags=NO_WINDOW,
         )
         assert duplicate.returncode != 0
-        assert b"environment_already_running" in duplicate.stderr
+        assert b"node_already_running" in duplicate.stderr
         assert (await wrs.snapshot()).boot_id == action.boot_id
 
 
 async def test_query_reconnect_without_resubmitting_actions():
-    async with LocalStack(runtime=False, tts=False, duration=0.03) as stack:
-        client = ActionClient(stack.transport)
+    async with LocalStack(bindings="configs/robot.toml", duration=0.03) as stack:
+        client = stack.system.clients["wrs"]
         action = await make_action(client, "pick", {"object": "A"})
         await client.submit(action)
         await eventually(
@@ -242,16 +241,18 @@ async def test_query_reconnect_without_resubmitting_actions():
         replacement = await asyncio.to_thread(stack.start_router)
         stack.processes.remove(replacement)
         stack.processes.insert(0, replacement)
-        await stack._ready("request/capabilities")
+        await stack._wait_ready(stack.system.clients["wrs"].transport, "request/capabilities")
         assert (await client.status(action.action_id)).state == "SUCCEEDED"
-        assert (await stack.transport.request("request/health", {}))["executions"] == 1
+        assert (await stack.system.clients["wrs"].transport.request("request/health", {}))[
+            "executions"
+        ] == 1
 
 
 async def test_cancel_tts_allows_robot_branch_to_finish_and_queue_runs_after_success():
-    async with LocalStack(duration=0.2, voice=True) as stack:
-        bus = stack.transport
-        wrs = ActionClient(bus)
-        tts = ActionClient(stack.node_transports["tts"])
+    async with LocalStack(duration=0.2) as stack:
+        bus = stack.system.clients["wrs"].transport
+        wrs = stack.system.clients["wrs"]
+        tts = stack.system.clients["tts"]
         plan = Plan(
             steps=[
                 Step(step_id="speech", skill="speak", args={"text": "cancel this"}),
@@ -271,7 +272,7 @@ async def test_cancel_tts_allows_robot_branch_to_finish_and_queue_runs_after_suc
         )
         aid = status["active_actions"]["speech"]
         old_epoch = (await wrs.snapshot()).control_epoch
-        await stack.node_transports["voice"].request(
+        await stack.system._transports["voice"].request(
             "request/voice/control",
             {
                 "event_id": new_id(),
@@ -284,7 +285,7 @@ async def test_cancel_tts_allows_robot_branch_to_finish_and_queue_runs_after_suc
             lambda: bus.request("request/task/status", {}),
             lambda s: s["state"] == "CANCELLED",
         )
-        assert (await wrs.snapshot()).objects["A"] == "B"
+        assert (await wrs.snapshot()).data.objects["A"] == "B"
         assert (await wrs.snapshot()).control_epoch == old_epoch
 
         # Only the cancelled resource remains held. A robot-only new task works.
@@ -305,4 +306,23 @@ async def test_cancel_tts_allows_robot_branch_to_finish_and_queue_runs_after_suc
             lambda: bus.request("request/task/status", {}),
             lambda s: s["state"] == "SUCCEEDED" and s["steps"].get("pick_D") == "SUCCEEDED",
         )
-        assert (await wrs.snapshot()).held_object == "D"
+        assert (await wrs.snapshot()).data.held_object == "D"
+
+
+async def test_snapshot_queries_preserve_pending_context_over_real_zenoh():
+    async with LocalStack(bindings="configs/robot.toml", duration=0.02) as stack:
+        node = stack.system.clients["wrs"]
+        request = await make_action(node, "move_named_pose", {"pose": "B"})
+        # More than the old 64-entry grant cache; bounded batches avoid overload.
+        for _ in range(10):
+            states = await asyncio.gather(*(node.snapshot() for _ in range(8)))
+            assert all("lease_id" not in state.model_dump() for state in states)
+        assert (await node.submit(request)).accepted
+        done = await eventually(
+            lambda: node.status(request.action_id), lambda s: s.state == "SUCCEEDED"
+        )
+        assert done.verification == "PASS"
+        assert (await node.snapshot()).data.pose == "B"
+        assert (await stack.system.clients["wrs"].transport.request("request/health", {}))[
+            "executions"
+        ] == 1

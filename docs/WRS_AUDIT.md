@@ -10,7 +10,7 @@
 | 项目 | 固定提交中的实际证据 | 本轮结果 |
 |---|---|---|
 | 包装 | pyproject.toml，setuptools，Python >=3.12 | 已审阅；未执行全量 editable 安装 |
-| 最小导入 | wrs/__init__.py；本项目 environments/wrs.py 中的 probe | PASS，未打开 viewer |
+| 最小导入 | wrs/__init__.py；本项目 env/wrs.py 中的 probe | PASS，未打开 viewer |
 | 机器人类 | wrs/robots/manipulators/ 下 Lite6、UR3、FR3、RS007L、CVR038、CRX5IA、OpenArm | 源码枚举，不表示设备经过测试 |
 | FK/状态 | robots/base/mech_base.py:101 的 fk(qs)、qs 和 link transforms | Lite6 构造/FK PASS，shape=[7,4,4]，6 个关节；虚拟状态 |
 | IK | robots/base/mech_base.py:307 的 ik(...) | 已定位，数值求解 UNVERIFIED |
@@ -34,7 +34,7 @@ core 的工具生成 uv.lock 锁定 Zenoh 1.9.0、Pydantic 2.13.5、pytest 9.1.1
 
 使用指定 Python 3.12.0 复核：本地 router 输出 `zenohd v1.9.0 built with rustc 1.93.0 (254b59607 2026-01-19)`；现有 ZIP 的 SHA256 与上述固定值一致。设置 `RUST_LOG=info` 或 `debug` 后，`--version` 会先向 stdout 写入带时间戳的 INFO 日志，然后才输出独立版本行。`LocalStack.start_router` 对整个输出执行 `startswith(b"zenohd v1.9.0 ")`，因此错误拒绝正确的二进制。
 
-复现命令：`$env:RUST_LOG = 'info'; & 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py examples/02_mock_interrupt.py`，修复前退出码 1，证据 `reports/router_version_before.txt`。决策：从独立版本行提取完整版本号并严格比较 1.9.0，保留继承的日志设置；真实不匹配时报告期望版本、二进制路径和实际输出，不放宽到任意版本。
+复现命令：`$env:RUST_LOG = 'info'; & 'D:\code\venv312\.venv\Scripts\python.exe' -X utf8 -S scripts/run.py examples/developer/02_mock_interrupt.py`，修复前退出码 1，证据 `reports/router_version_before.txt`。决策：从独立版本行提取完整版本号并严格比较 1.9.0，保留继承的日志设置；真实不匹配时报告期望版本、二进制路径和实际输出，不放宽到任意版本。
 
 另观察到直接使用共享 site-packages 时 `eclipse-zenoh` 为 1.10.1；项目启动器加载 `.local/deps` 的锁定 1.9.0。两者与 router 版本检查误报分开处理，不修改共享环境。后续验证通过项目启动器执行；真实硬件、模型 API 和音频不在本修复范围内。
 
@@ -42,7 +42,7 @@ core 的工具生成 uv.lock 锁定 Zenoh 1.9.0、Pydantic 2.13.5、pytest 9.1.1
 
 ## M3：已验证的 Lite6 虚拟节点
 
-environments/wrs.py 在独立 Environment 进程使用真实 Lite6、wmij.interp_by_n 和 robot.fk，单所有者线程操作模型，Zenoh/控制循环读取带时间、单位、frame/source 的镜像状态。验证关节到位与 FK 变换一致，默认 headless，不构造硬件或查看器。
+env/wrs.py 在独立 Environment 进程使用真实 Lite6、wmij.interp_by_n 和 robot.fk，单所有者线程操作模型，Zenoh/控制循环读取带时间、单位、frame/source 的镜像状态。验证关节到位与 FK 变换一致，默认 headless，不构造硬件或查看器。
 
 capabilities / snapshot / observe / move_named_pose / status / cancel / hold / resume admission 已经真实跨进程验证。每次 FK 不可抢占：控制先撤权，等待在途 FK 返回后才确认停止；不对线程 future 执行 cancel 来冒充设备停车。没有控制器轨迹队列，controller_flush=false，stop_scope=virtual_fk_boundary。
 

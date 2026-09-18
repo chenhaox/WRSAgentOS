@@ -1,7 +1,7 @@
 """Structured replay policy. VAD is never robot stop authority."""
 
 
-def decide_event(event, state=None):
+def decide_event(event):
     if event.quoted or event.negated or event.confidence < 0.9:
         return "clarify"
     return {

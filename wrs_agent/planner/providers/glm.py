@@ -7,8 +7,8 @@ from typing import Literal
 import httpx
 from pydantic import Field
 
-from wrs_agent.planner.api import PlanDecision
-from wrs_agent.planner.providers.api import ModelReply, ModelRequest
+from wrs_agent.planner import PlanDecision
+from wrs_agent.planner.providers import ModelReply, ModelRequest
 from wrs_agent.schemas import MAX_BYTES, Boundary, decode, encode
 
 CODING_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4"
@@ -77,7 +77,7 @@ def request_body(request: ModelRequest, config: GLMConfig) -> dict:
 
 
 def parse_reply(data: bytes) -> ModelReply:
-    """Keep native message/usage in memory; expose one validated internal decision."""
+    """Decode the native protocol; ModelPlanner validates the proposed decision."""
     try:
         body = decode(data)
         choices = body["choices"]
@@ -111,13 +111,15 @@ def parse_reply(data: bytes) -> ModelReply:
             arguments = call["function"]["arguments"]
             if not isinstance(arguments, str):
                 raise ValueError("json_arguments_required")
-            decision = PlanDecision.model_validate(decode(arguments.encode()))
+            text = arguments  # Parse the proposal once, at the Planner boundary.
         else:
             if finish != "stop":
                 raise ValueError("missing_tool")
             # Text that resembles JSON is still an answer, never executable.
-            decision = PlanDecision(kind="answer", text=message["content"])
-        return ModelReply(decision.model_dump_json(), "complete", usage, metadata)
+            if not isinstance(message["content"], str):
+                raise ValueError("text_required")
+            text = encode({"kind": "answer", "text": message["content"], "plan": None}).decode()
+        return ModelReply(text, "complete", usage, metadata)
     except (KeyError, TypeError, ValueError, RecursionError):
         raise GLMError("glm_invalid_reply") from None
 

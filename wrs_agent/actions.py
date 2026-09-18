@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import inspect
 import time
 from collections import OrderedDict
 
@@ -13,10 +14,10 @@ from wrs_agent.schemas import (
     CapabilitySnapshot,
     ControlReceipt,
     ControlRequest,
-    WorldSnapshot,
+    NodeSnapshot,
     new_id,
 )
-from wrs_agent.skills import SPECS, validate_skill
+from wrs_agent.skills import validate_skill
 from wrs_agent.store import Journal
 
 
@@ -34,25 +35,30 @@ class ActionExecutor:
         journal_path,
         *,
         state,
-        perform,
         skills,
         backend,
         duration=0.4,
         fault=None,
-        advance=None,
         close_backend=None,
         capabilities_extra=None,
     ):
+        self.skills = dict(skills)
+        if not self.skills or any(
+            name != entry.spec.name
+            or not callable(entry.handler)
+            or entry.spec.parameters != entry.arguments.model_json_schema()
+            for name, entry in self.skills.items()
+        ):
+            raise ValueError("invalid_skill_registration")
         self.boot_id = new_id()
         self.epoch = 0
         self.journal = Journal(journal_path)
         self.records = self.journal.records.copy()
         self.world = state
-        self.perform = perform
-        self.advance, self.close_backend = advance, close_backend
+        self.close_backend = close_backend
         self.capabilities_extra = capabilities_extra or {}
-        self.skills = frozenset(skills)
         self.backend = backend
+        self.node_id = "wrs" if self.capabilities().robot_controls else "tts"
         self.admission = "HELD" if self.records else "OPEN"
         self.stop_confirmed = True
         if any(s.state == "UNKNOWN" for _, s in self.records.values()):
@@ -64,7 +70,7 @@ class ActionExecutor:
         self.stop_signal = asyncio.Event()
         self.leases = OrderedDict()
         self.controls = {}
-        self.revisions = {}
+        self.revisions = {}  # Legacy wire compatibility; new executions use fresh task IDs.
         self.executions = 0
         self.on_event = lambda suffix, event: None
 
@@ -73,28 +79,28 @@ class ActionExecutor:
             skills=sorted(self.skills),
             backend=self.backend,
             **self.capabilities_extra,
-            resources=sorted({r for name in self.skills for r in SPECS[name].resources}),
+            resources=sorted({r for entry in self.skills.values() for r in entry.spec.resources}),
         )
 
     def snapshot(self):
-        lease = new_id()
-        self.leases[lease] = (self.epoch, self.world.version, time.monotonic() + 2.0)
-        while len(self.leases) > 64:
-            self.leases.popitem(last=False)
-        return WorldSnapshot(
+        return NodeSnapshot(
+            node_id=self.node_id,
+            captured_at_ns=time.time_ns(),
             boot_id=self.boot_id,
             control_epoch=self.epoch,
             world_version=self.world.version,
-            lease_id=lease,
             admission=self.admission,
             active_action=self.active,
-            **self.world.snapshot(),
+            data=self.world.snapshot(),
             stop_confirmed=self.stop_confirmed,
         )
 
     def context(self):
-        state = self.snapshot().model_dump()
-        return ActionContext.model_validate({k: state[k] for k in ActionContext.model_fields})
+        lease = new_id()
+        self.leases[lease] = (self.epoch, self.world.version, time.monotonic() + 2.0)
+        while len(self.leases) > 64:
+            self.leases.popitem(last=False)
+        return ActionContext(**self.snapshot().model_dump(), lease_id=lease)
 
     def _finish_cancel(self):
         # TTS cancellation ends one utterance. New work still needs a fresh epoch/lease.
@@ -166,7 +172,7 @@ class ActionExecutor:
             try:
                 if request.skill not in self.skills:
                     raise ValueError("skill_not_on_node")
-                validate_skill(request.skill, request.version, request.args)
+                validate_skill(request.skill, request.version, request.args, registry=self.skills)
             except ValueError:
                 reason = "invalid_skill_or_arguments"
         if not reason and self.active is not None:
@@ -207,22 +213,34 @@ class ActionExecutor:
             self._status(aid, "RUNNING")
             self.executions += 1
             await self._save(aid)
-            args = validate_skill(request.skill, request.version, request.args)
+            args = validate_skill(
+                request.skill, request.version, request.args, registry=self.skills
+            )
             verified = False
-            if self.advance is not None:
 
-                def progress(value):
-                    if not self.stop_signal.is_set():
-                        self._status(aid, "RUNNING", progress=value)
-                        self.on_event("state/world", self.snapshot().model_dump())
-
+            def progress(value):
                 if not self.stop_signal.is_set():
-                    verified = await self.advance(request.skill, args, self.stop_signal, progress)
-            else:
+                    self._status(aid, "RUNNING", progress=value)
+                    self.on_event("state/world", self.snapshot().model_dump())
+
+            if self.duration > 0:
                 try:
                     await asyncio.wait_for(self.stop_signal.wait(), timeout=self.duration)
                 except TimeoutError:
                     pass
+            if (
+                not self.stop_signal.is_set()
+                and request.control_epoch == self.epoch
+                and self.admission == "OPEN"
+                and self.fault not in {"unknown", "inconclusive"}
+            ):
+                result = self.skills[request.skill].handler(
+                    self.world,
+                    args,
+                    self.stop_signal,
+                    progress,
+                )
+                verified = await result if inspect.isawaitable(result) else result
             if (
                 self.stop_signal.is_set()
                 or request.control_epoch != self.epoch
@@ -241,8 +259,6 @@ class ActionExecutor:
                 self.stop_confirmed = False
                 self._status(aid, "UNKNOWN", "observation_inconclusive", "INCONCLUSIVE")
                 return
-            if self.advance is None:
-                verified = self.perform(request.skill, self.world, args, self.fault)
             self.world.version += 1
             self._status(aid, "VERIFYING")
             # No await between virtual effect and verification: one state owner.

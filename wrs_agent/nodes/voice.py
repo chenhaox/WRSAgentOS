@@ -4,7 +4,7 @@ from wrs_agent.policy import decide_event
 from wrs_agent.schemas import ControlRequest, Empty, Interaction
 
 
-def register_speech(bus, wrs, tts, agent_bus):
+def register_voice(bus, wrs, tts, agent_bus):
     processed = {}
 
     async def handle(payload):
@@ -21,7 +21,7 @@ def register_speech(bus, wrs, tts, agent_bus):
         processed[event.event_id] = (event, result)
         if disposition in {"hold", "cancel_tts"}:
             node = wrs if disposition == "hold" else tts
-            world = await node.context(control=True)
+            world = await node.snapshot(control=True)
             if disposition == "cancel_tts" and world.active_action is None:
                 result["effect"] = "no_active_tts"
             else:
@@ -32,7 +32,7 @@ def register_speech(bus, wrs, tts, agent_bus):
                     action_id=world.active_action if disposition == "cancel_tts" else None,
                 )
                 receipt = await (
-                    node.hold(request) if disposition == "hold" else node.cancel(request)
+                    node.control("hold", request) if disposition == "hold" else node.cancel(request)
                 )
                 result.update(receipt.model_dump())
         elif disposition == "answer":
@@ -47,12 +47,22 @@ def register_speech(bus, wrs, tts, agent_bus):
                     {"request_id": event.event_id, "plan": event.plan.model_dump()},
                 )
             else:
+                current = await agent_bus.request("request/task/status", {})
+                if current["task_id"] is None:
+                    raise ValueError("no_task_to_replace")
+                target = current["task_id"]
                 await agent_bus.request(
-                    "request/task/hold", {"request_id": event.event_id + "-hold"}, control=True
+                    "request/task/hold",
+                    {"request_id": event.event_id + "-hold", "task_id": target},
+                    control=True,
                 )
                 result["task"] = await agent_bus.request(
                     "request/task/replace",
-                    {"request_id": event.event_id, "replacement": event.plan.model_dump()},
+                    {
+                        "request_id": event.event_id,
+                        "task_id": target,
+                        "replacement": event.plan.model_dump(),
+                    },
                     control=True,
                 )
         bus.publish("events/interaction", {"event_id": event.event_id, **result})

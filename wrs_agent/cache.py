@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 
 from wrs_agent.schemas import Plan
-from wrs_agent.skills import SPECS
+from wrs_agent.skills import SKILLS
 
 TRANSFER = ("observe", "pick", "place", "verify")
 NAME = r"[A-Za-z][A-Za-z0-9_-]{0,39}"
@@ -45,16 +45,16 @@ def applicability(intent, worlds, capabilities, bindings):
         return None, "capability_missing"
     if world.admission != "OPEN" or not world.stop_confirmed or world.active_action:
         return None, "state_not_ready"
-    if world.held_object is not None:
+    if world.data.held_object is not None:
         return None, "gripper_not_empty"
-    if intent.object not in world.objects or world.objects[intent.object] == "gripper":
+    if intent.object not in world.data.objects or world.data.objects[intent.object] == "gripper":
         return None, "object_not_observed"
-    calibration = world.facts.get("calibration")
+    calibration = world.data.facts.get("calibration")
     if not isinstance(calibration, str) or not calibration:
         return None, "calibration_missing"
-    specs = {name: SPECS[name].model_dump() for name in TRANSFER}
+    specs = {name: SKILLS[name].spec.model_dump() for name in TRANSFER}
     return {
-        "location": world.objects[intent.object],
+        "location": world.data.objects[intent.object],
         "calibration": calibration,
         "skills": sha256(json.dumps(specs, sort_keys=True).encode()).hexdigest(),
         "node": node_name,
@@ -76,7 +76,7 @@ def parameterize(plan, intent):
         if (
             step.args != expected[index]
             or step.depends_on != dependencies
-            or step.version != SPECS[step.skill].version
+            or step.version != SKILLS[step.skill].spec.version
             or step.category != "interactive"
         ):
             return None
@@ -91,7 +91,6 @@ def parameterize(plan, intent):
 
 @dataclass
 class CacheEntry:
-    signature: str
     template: dict
     conditions: dict
     schema_version: int = 1
@@ -156,7 +155,7 @@ class PlanCache:
         template = parameterize(plan, intent)
         if reason or template is None:
             return False
-        self.entries[intent.signature] = CacheEntry(intent.signature, template, conditions)
+        self.entries[intent.signature] = CacheEntry(template, conditions)
         self.entries.move_to_end(intent.signature)
         while len(self.entries) > self.capacity:
             self.entries.popitem(last=False)

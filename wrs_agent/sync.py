@@ -12,11 +12,11 @@ def _require_sync():
         asyncio.get_running_loop()
     except RuntimeError:
         return
-    raise RuntimeError("Use 'async with System.local()' inside async code.")
+    raise RuntimeError("Use 'async with System.local()' or 'System.connect()' inside async code.")
 
 
 class Action:
-    """Acceptance returns promptly. Only wait() waits for verified completion."""
+    """A submitted action. wait() returns its terminal status, including failure."""
 
     def __init__(self, session, action):
         self._session, self._action = session, action
@@ -33,16 +33,34 @@ class Action:
 
 
 class Session:
-    """A thin caller-side facade; all work uses the existing asynchronous System."""
+    """Single-thread script calls into System; the local loop runs only during calls.
+
+    Remote nodes keep running between calls. A blocking wait occupies the caller;
+    use asynchronous System for concurrent control through the same client.
+    """
 
     def __init__(self, runner, system):
         self._runner, self._system = runner, system
         self._thread = threading.get_ident()
         self._closed = False
 
+    @property
+    def endpoint(self):
+        return self._system.endpoint
+
+    @property
+    def site(self):
+        return self._system.site
+
+    @property
+    def env_id(self):
+        return self._system.env_id
+
     def _call(self, method, *args, **kwargs):
         if self._closed:
-            raise RuntimeError("Session is closed; use commands inside 'with launch()'.")
+            raise RuntimeError(
+                "Session is closed; use commands inside 'with launch()' or 'with connect()'."
+            )
         if threading.get_ident() != self._thread:
             raise RuntimeError("Use this synchronous session from its owning thread.")
         _require_sync()
@@ -50,6 +68,9 @@ class Session:
 
     def nodes(self):
         return self._call(self._system.nodes)
+
+    def skills(self, query=""):
+        return self._call(self._system.skills, query)
 
     def start(self, *steps):
         return self._call(self._system.start, *steps)
@@ -89,12 +110,29 @@ class Session:
         return self._call(self._system.replay, kind)
 
 
+def launch(*, backend="mock", duration=0.4, bindings=None, port=0, site="local", env_id=None):
+    """Start configured local nodes; close owned nodes and router on exit."""
+    return _session(
+        System.local(
+            backend=backend,
+            duration=duration,
+            bindings=bindings,
+            port=port,
+            site=site,
+            env_id=env_id,
+        )
+    )
+
+
+def connect(endpoint="tcp/127.0.0.1:7447", *, site="local", env_id="arm01", bindings=None):
+    """Connect to running nodes with WRS_AGENT_TOKEN; exit only closes this connection."""
+    return _session(System.connect(endpoint, site=site, env_id=env_id, bindings=bindings))
+
+
 @contextmanager
-def launch(*, backend="mock", duration=0.4, bindings=None):
-    """Start a local system for a plain Python script; close owned nodes on exit."""
+def _session(context):
     _require_sync()
     with asyncio.Runner() as runner:
-        context = System.local(backend=backend, duration=duration, bindings=bindings)
         session = Session(runner, runner.run(context.__aenter__()))
         try:
             yield session

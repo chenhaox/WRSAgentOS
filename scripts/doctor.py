@@ -61,7 +61,7 @@ def main():
         code = (
             "import sys,json; "
             "sys.path[:0]=[sys.argv[1],sys.argv[2]]; "
-            "from wrs_agent.environments.wrs import probe_virtual; "
+            "from wrs_agent.env.wrs import probe_virtual; "
             "print(json.dumps(probe_virtual()))"
         )
         report["wrs_probe"] = command(

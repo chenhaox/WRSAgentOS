@@ -9,9 +9,8 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from wrs_agent.planner.api import PlanRequest
-from wrs_agent.planner.model import ModelPlanner
-from wrs_agent.planner.providers.api import ModelRequest
+from wrs_agent.planner import ModelPlanner, PlanRequest
+from wrs_agent.planner.providers import ModelRequest
 from wrs_agent.planner.providers.glm import (
     CODING_BASE_URL,
     GLMClient,
@@ -52,6 +51,8 @@ async def test_native_tool_roundtrip_and_reused_client(monkeypatch):
     try:
         reply = await client.complete(REQUEST)
         assert reply.finish == "complete" and reply.usage["total_tokens"] == 100
+        arguments = reply_body()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+        assert reply.text == arguments  # Native JSON is not parsed and re-serialized here.
         assert reply.metadata["message"]["tool_calls"][0]["id"] == "proposal-1"
         decision = await ModelPlanner(client).plan(
             PlanRequest(user_goal=REQUEST.goal, world={}, skills=[])
@@ -80,7 +81,7 @@ def test_text_is_answer_never_executable(content):
 @pytest.mark.parametrize(
     "fault", ["two_tools", "wrong_tool", "partial", "authority", "cycle", "empty"]
 )
-def test_bad_tool_calls_fail_closed(fault):
+async def test_bad_tool_calls_fail_closed(fault):
     body = reply_body()
     calls = body["choices"][0]["message"]["tool_calls"]
     if fault == "two_tools":
@@ -99,8 +100,19 @@ def test_bad_tool_calls_fail_closed(fault):
         calls[0]["function"]["arguments"] = json.dumps(arguments)
     else:
         calls.clear()
-    with pytest.raises(GLMError, match="^glm_invalid_reply$"):
-        parse_reply(as_bytes(body))
+    client = GLMClient(
+        GLMConfig(model="fixture"),
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body)),
+    )
+    try:
+        # Protocol errors belong to GLM; malformed/unsafe plans belong to Planner.
+        error = GLMError if fault in {"two_tools", "wrong_tool", "empty"} else ValidationError
+        with pytest.raises(error):
+            await ModelPlanner(client).plan(
+                PlanRequest(user_goal="put A in B", world={}, skills=[])
+            )
+    finally:
+        await client.aclose()
 
 
 @pytest.mark.parametrize("finish", ["length", "sensitive", "network_error", "unknown", None])

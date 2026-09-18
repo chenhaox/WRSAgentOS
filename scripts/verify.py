@@ -29,12 +29,13 @@ def main():
                 "--junitxml=reports/zenoh.xml",
             ],
         ),
-        ("roundtrip", ["examples/01_zenoh_roundtrip.py"]),
-        ("parallel_interrupt", ["examples/02_mock_interrupt.py"]),
-        ("glm_fixture", ["examples/04_glm_task.py", "--dry-run"]),
-        ("skill_library", ["examples/09_skill_library.py"]),
-        ("plan_cache", ["examples/05_cache_reuse.py"]),
-        ("system_nodes", ["examples/10_system_nodes.py"]),
+        ("first_action", ["examples/beginner/01_action.py"]),
+        ("roundtrip", ["examples/developer/01_zenoh_roundtrip.py"]),
+        ("parallel_interrupt", ["examples/developer/02_mock_interrupt.py"]),
+        ("glm_fixture", ["examples/developer/03_glm_adapter.py", "--dry-run"]),
+        ("skill_library", ["examples/beginner/02_skills.py"]),
+        ("plan_cache", ["examples/tasks/02_cache_reuse.py"]),
+        ("system_nodes", ["examples/tasks/01_parallel_and_stop.py"]),
         ("lint", ["-m", "ruff", "check", "wrs_agent", "tests", "examples", "scripts"]),
         (
             "doctor",
@@ -56,8 +57,8 @@ def main():
                     "--junitxml=reports/wrs.xml",
                 ],
             ),
-            ("wrs_complete", ["examples/03_wrs_scene.py"]),
-            ("wrs_cancel", ["examples/03_wrs_scene.py", "--cancel"]),
+            ("wrs_complete", ["examples/tasks/03_wrs_scene.py"]),
+            ("wrs_cancel", ["examples/tasks/03_wrs_scene.py", "--cancel"]),
         ]
     results = []
     for name, arguments in checks:

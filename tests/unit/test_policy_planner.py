@@ -1,9 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from wrs_agent.planner.api import PlanRequest
-from wrs_agent.planner.model import ModelPlanner
-from wrs_agent.planner.providers.api import ModelReply
+from wrs_agent.planner import ModelPlanner, PlanRequest
+from wrs_agent.planner.providers import ModelReply
 from wrs_agent.planner.providers.mock import MockClient
 from wrs_agent.policy import decide_event
 from wrs_agent.schemas import Interaction

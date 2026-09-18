@@ -4,7 +4,7 @@ import threading
 import pytest
 from conftest import action, control, eventually
 
-from wrs_agent.environments import wrs as adapter
+from wrs_agent.env import wrs as adapter
 
 
 async def test_slow_fk_ack_is_not_stop_confirmation(tmp_path, monkeypatch):
@@ -77,7 +77,7 @@ async def test_wrs_backend_error_is_unknown(tmp_path, monkeypatch):
         await env.submit(request)
         await env.runner
         assert env.status(request.action_id).state == "UNKNOWN"
-        assert env.snapshot().kinematics.valid is False
+        assert env.snapshot().data.kinematics.valid is False
         assert not env.stop_confirmed and env.admission == "UNKNOWN"
         assert not (await env.resume(control(env, world_version=env.world.version))).accepted
     finally:

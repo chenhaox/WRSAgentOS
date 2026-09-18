@@ -6,7 +6,7 @@ from wrs_agent.schemas import ActionRequest, ControlRequest, new_id
 
 
 def action(env, skill="pick", args=None, **updates):
-    world = env.snapshot()
+    world = env.context()
     data = dict(
         action_id=new_id(),
         task_id="task",
@@ -16,7 +16,7 @@ def action(env, skill="pick", args=None, **updates):
         lease_id=world.lease_id,
         world_version=world.world_version,
         skill=skill,
-        args=args or {"object": "A"},
+        args={"object": "A"} if args is None else args,
     )
     data.update(updates)
     return ActionRequest(**data)
@@ -41,7 +41,7 @@ async def eventually(call, predicate, timeout=4):
 
 @pytest.fixture
 def make_env(tmp_path):
-    from wrs_agent.environments.mock import make_mock_environment
+    from wrs_agent.env.mock import make_mock_environment
 
     created = []
 

@@ -2,10 +2,11 @@
 
 import asyncio
 from collections import deque
+from dataclasses import dataclass
 
 from wrs_agent.cache import PlanCache
-from wrs_agent.nodes.api import ActionProvider, action_request
-from wrs_agent.planner.api import PlanDecision, Planner, PlanRequest
+from wrs_agent.nodes.actions import ActionProvider, action_request
+from wrs_agent.planner import PlanDecision, Planner, PlanRequest
 from wrs_agent.schemas import (
     TERMINAL,
     ControlReceipt,
@@ -16,7 +17,7 @@ from wrs_agent.schemas import (
     TaskRequest,
     new_id,
 )
-from wrs_agent.skills import SPECS, lookup_skills, validate_skill
+from wrs_agent.skills import SKILLS, lookup_skills, validate_skill
 
 
 def validate_plan(plan, capabilities=None, bindings=None):
@@ -24,11 +25,29 @@ def validate_plan(plan, capabilities=None, bindings=None):
     for step in plan.steps:
         validate_skill(step.skill, step.version, step.args)
         if capabilities is not None:
-            node = (bindings or {}).get(step.skill, SPECS[step.skill].node)
+            node = (bindings or {}).get(step.skill)
             cap = capabilities.get(node)
-            if cap is None or not set(SPECS[step.skill].required_capabilities).issubset(cap.skills):
+            if cap is None or not set(SKILLS[step.skill].spec.required_capabilities).issubset(
+                cap.skills
+            ):
                 raise ValueError("unsupported_skill_on_current_node")
     return plan
+
+
+@dataclass(frozen=True)
+class _Task:
+    """One execution definition; JSON also freezes nested arguments and dependencies."""
+
+    task_id: str
+    plan_json: str
+    supersedes: str | None = None
+
+    @classmethod
+    def create(cls, plan, supersedes=None):
+        return cls(new_id(), validate_plan(plan).model_dump_json(), supersedes)
+
+    def plan(self):
+        return Plan.model_validate_json(self.plan_json)
 
 
 class Runtime:
@@ -42,8 +61,8 @@ class Runtime:
     ):
         self.nodes, self.bindings, self.planner = nodes, bindings, planner
         self.registry = registry
-        self.task_id = new_id()
-        self.revision = 0
+        self.task = None
+        self.hold_accepted = False
         self.state, self.reason = "IDLE", ""
         self.active_actions = {}
         self.results = {}
@@ -53,25 +72,46 @@ class Runtime:
         self.node_locks = {node: asyncio.Lock() for node in nodes}
         self.planner_calls = 0
         self.planning = None
+        self.planning_request_id = None
         self.planning_state = "IDLE"
         self.queued = []
         self.cache = PlanCache()
         self.recoveries = 0
-        self.recovery_revision = None
+        self.recovered_task = None
         self.action_history = deque(maxlen=128)
+
+    @property
+    def task_id(self):
+        return self.task.task_id if self.task else None
+
+    def _active(self, task):
+        return self.task is task and not self.closed and self.state in {"RUNNING", "RESUMING"}
+
+    def _planning_current(self, request_id):
+        return self.planning_request_id == request_id and not self.closed
+
+    def _activate(self, task, state="RUNNING"):
+        self.planning_request_id = None
+        self.planning_state = "IDLE"
+        self.task = task
+        self.state, self.reason, self.results = state, "", {}
+        self.active_actions.clear()
+        self.hold_accepted = False
 
     def snapshot(self):
         actions = dict(self.active_actions)
         return {
             "nodes": self.registry.snapshot() if self.registry else {},
             "task_id": self.task_id,
-            "revision": self.revision,
+            "revision": 0,  # Deprecated wire field; task IDs identify executions.
+            "supersedes": self.task.supersedes if self.task else None,
             "state": self.state,
             "action_id": next(iter(actions.values()), None),
             "active_actions": actions,
             "steps": dict(self.results),
             "reason": self.reason,
             "planning": self.planning_state,
+            "planning_request_id": self.planning_request_id,
             "planner_calls": self.planner_calls,
             "queued": len(self.queued),
             "cache_hit": self.cache.last_hit,
@@ -105,15 +145,11 @@ class Runtime:
             return duplicate
         if self.closed or self.state not in {"IDLE", "SUCCEEDED", "FAILED", "CANCELLED"}:
             raise ValueError("task_busy_or_held")
-        if self.planning and not self.planning.done():
-            raise ValueError("planner_busy")
-        plan = validate_plan(request.plan)
-        self.revision += 1
-        self.task_id = new_id()
-        self.state, self.reason, self.results = "RUNNING", "", {}
+        task = _Task.create(request.plan)
+        self._activate(task)
         result = self.snapshot()
         self.requests[request.request_id] = (request.model_dump(), result)
-        self._spawn(self._execute(plan, self.revision))
+        self._spawn(self._execute(task))
         return result
 
     async def enqueue(self, request: TaskRequest):
@@ -126,8 +162,9 @@ class Runtime:
             raise ValueError("task_queue_full")
         if self.state != "RUNNING":
             raise ValueError("enqueue_requires_active_task")
-        self.queued.append(plan)
-        result = {"accepted": True, "queued": len(self.queued)}
+        task = _Task.create(plan)
+        self.queued.append(task)
+        result = {"accepted": True, "task_id": task.task_id, "queued": len(self.queued)}
         self.requests[request.request_id] = (data, result)
         return result
 
@@ -138,48 +175,67 @@ class Runtime:
             return duplicate
         if self.planner is None or (self.planning and not self.planning.done()):
             raise ValueError("planner_unavailable_or_busy")
-        if self.state not in {"IDLE", "SUCCEEDED", "FAILED", "CANCELLED", "RUNNING"}:
+        if self.closed or self.state not in {"IDLE", "SUCCEEDED", "FAILED", "CANCELLED", "RUNNING"}:
             raise ValueError("task_held")
-        # A new decision during execution is pending; it never implicitly resumes a held node.
-        if self.state != "RUNNING":
-            self.revision += 1
-            self.task_id = new_id()
-            self.reason, self.results = "", {}
+        # Planning requests have an ID; a Task exists only after an executable plan is valid.
+        was_running = self.state == "RUNNING"
+        if not was_running:
+            self.reason = ""
+        self.planning_request_id = request.request_id
         self.planning_state = "WAITING"
-        result = {"accepted": True, "revision": self.revision}
+        result = {"accepted": True, "request_id": request.request_id, "revision": 0}
         self.requests[request.request_id] = (data, result)
-        self.planning = self._spawn(self._plan(request.goal, self.revision))
+        self.planning = self._spawn(self._plan(request.goal, request.request_id, was_running))
         return result
 
     async def _state(self, node, *, control=False):
-        # Compatibility for existing in-process test providers; new providers use context.
-        if hasattr(node, "context"):
-            return await node.context(control=control)
         return await node.snapshot(control=control)
 
-    async def _capabilities(self):
+    async def _capabilities(self, names=None):
+        names = self.nodes if names is None else names
         if self.registry:
-            await self.registry.refresh()
+            await self.registry.refresh(names)
         result = {}
-        for name, node in self.nodes.items():
-            if self.registry and not self.registry.snapshot().get(name, {}).get("ready"):
-                continue
-            result[name] = await node.capabilities()
+        for name in names:
+            if self.registry:
+                if not self.registry.snapshot()[name]["ready"]:
+                    continue
+                result[name] = await self.registry.capabilities(name, self.nodes[name])
+            else:
+                result[name] = await self.nodes[name].capabilities()
         return result
 
-    async def _plan(self, goal, revision):
-        was_running = self.state == "RUNNING"
+    async def _plan_valid(self, request_id, worlds):
+        for name, old in worlds.items():
+            if not self._planning_current(request_id):
+                return False
+            current = await self._state(self.nodes[name], control=True)
+            if not self._planning_current(request_id):
+                return False
+            if (
+                current.boot_id != old.boot_id
+                or current.control_epoch != old.control_epoch
+                or current.admission != "OPEN"
+                or current.world_version != old.world_version
+            ):
+                self.planning_state = "STALE"
+                return False
+        return self._planning_current(request_id)
+
+    async def _plan(self, goal, request_id, was_running):
+        worlds = {}
         try:
             capabilities = await self._capabilities()
             worlds = {
                 name: await self._state(self.nodes[name], control=True) for name in capabilities
             }
+            if not self._planning_current(request_id):
+                return
             request = PlanRequest(
                 user_goal=goal,
-                world={n: w.model_dump() for n, w in worlds.items()},
+                world={n: w.model_dump(exclude={"lease_id"}) for n, w in worlds.items()},
                 skills=[
-                    spec.model_dump(exclude={"node"})
-                    for spec in lookup_skills(goal, capabilities, self.bindings)
+                    spec.model_dump() for spec in lookup_skills(goal, capabilities, self.bindings)
                 ],
             )
             cached = self.cache.lookup(goal, worlds, capabilities, self.bindings)
@@ -188,35 +244,20 @@ class Runtime:
                 decision = await self.planner.plan(request)
             else:
                 decision = PlanDecision(kind="execute", plan=cached)
-            if revision != self.revision or self.closed:
-                self.planning_state = "STALE"
-                return
-            for name in worlds:
-                current = await self._state(self.nodes[name], control=True)
-                old = worlds[name]
-                if (
-                    current.boot_id != old.boot_id
-                    or current.control_epoch != old.control_epoch
-                    or current.admission != "OPEN"
-                    or current.world_version != old.world_version
-                ):
-                    self.planning_state = "STALE"
-                    return
-            if revision != self.revision or self.closed:
-                self.planning_state = "STALE"
+            if not await self._plan_valid(request_id, worlds):
                 return
             if decision.kind != "execute":
                 self.reason, self.planning_state = decision.text, decision.kind.upper()
                 return
-            if self.state == "RUNNING":
-                # Do not silently substitute an active goal. Explicit hold/replace is required.
+            if was_running:
                 self.planning_state = "REQUIRES_CONFIRMATION"
                 return
-            self.planning_state = "DONE"
-            self.state = "RUNNING"
             validated = validate_plan(decision.plan, capabilities, self.bindings)
-            await self._execute(validated, revision)
-            if revision == self.revision:
+            task = _Task.create(validated)
+            self._activate(task)
+            self.planning_state = "DONE"
+            await self._execute(task)
+            if self.task is task and not self.closed:
                 if self.state == "SUCCEEDED":
                     self.cache.remember(goal, validated, worlds, capabilities, self.bindings)
                 else:
@@ -224,7 +265,16 @@ class Runtime:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if revision != self.revision or self.closed:
+            if not self._planning_current(request_id):
+                return
+            # A late provider error after a physical stop is obsolete too.
+            try:
+                valid = await self._plan_valid(request_id, worlds)
+            except Exception:
+                valid = False
+            if not self._planning_current(request_id):
+                return
+            if not valid:
                 self.planning_state = "STALE"
                 return
             self.planning_state = "FAILED"
@@ -233,15 +283,18 @@ class Runtime:
             if not was_running:
                 self.state = "FAILED"
 
-    async def _execute(self, plan, revision):
+    async def _execute(self, task):
+        if not self._active(task):
+            return
+        plan = task.plan()
         try:
-            capabilities = await self._capabilities()
+            capabilities = await self._capabilities({self.bindings[s.skill] for s in plan.steps})
             validate_plan(plan, capabilities, self.bindings)
             if self.registry:
                 for step in plan.steps:
-                    self.registry.provider(step.skill)
+                    self.registry.node_for(step.skill)
         except Exception:
-            if revision == self.revision:
+            if self._active(task):
                 self.state, self.reason = "FAILED", "capability_preflight_failed"
             return
         done = {step.step_id: asyncio.Event() for step in plan.steps}
@@ -256,10 +309,10 @@ class Runtime:
                         return
                 node_name = self.bindings[step.skill]
                 async with self.node_locks[node_name]:
-                    if revision != self.revision or self.closed:
+                    if not self._active(task):
                         outcomes[step.step_id] = "STALE"
                         return
-                    outcomes[step.step_id] = await self._run_step(step, node_name, revision)
+                    outcomes[step.step_id] = await self._run_step(step, node_name, task)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -268,15 +321,16 @@ class Runtime:
                     if (isinstance(exc, TimeoutError) or "UNKNOWN" in str(exc))
                     else "FAILED"
                 )
-                if revision == self.revision:
+                if self._active(task):
                     self.reason = str(exc)[:240]
-                if outcomes[step.step_id] == "UNKNOWN":
+                if self._active(task) and outcomes[step.step_id] == "UNKNOWN":
                     try:
-                        await self._fence(self.bindings[step.skill])
+                        await self._fence(self.bindings[step.skill], task)
                     except Exception:
-                        self.reason = "UNKNOWN: control_unconfirmed"
+                        if self._active(task):
+                            self.reason = "UNKNOWN: control_unconfirmed"
             finally:
-                if revision == self.revision:
+                if self._active(task):
                     self.results.update(outcomes)
                 done[step.step_id].set()
 
@@ -292,7 +346,7 @@ class Runtime:
                 if not job.done():
                     job.cancel()
             await asyncio.gather(*jobs, return_exceptions=True)
-        if revision != self.revision or self.closed:
+        if not self._active(task):
             return
         values = set(outcomes.values())
         self.state = (
@@ -308,64 +362,66 @@ class Runtime:
             self.reason = ""
         if self.state == "SUCCEEDED" and self.queued and not self.closed:
             queued = self.queued.pop(0)
-            self.revision += 1
-            self.task_id = new_id()
-            self.state, self.results = "RUNNING", {}
-            self._spawn(self._execute(queued, self.revision))
+            self._activate(queued)
+            self._spawn(self._execute(queued))
 
-    async def _run_step(self, step, node_name, revision):
-        outcome, status, original = await self._attempt(step, node_name, revision)
+    async def _run_step(self, step, node_name, task):
+        outcome, status, original = await self._attempt(step, node_name, task)
         if (
             outcome != "FAILED"
             or status.verification != "FAIL"
             or status.reason not in {"localization_failed", "grasp_failed"}
-            or "observe_once" not in SPECS[step.skill].recovery
-            or self.recovery_revision == revision
-            or revision != self.revision
+            or "observe_once" not in SKILLS[step.skill].spec.recovery
+            or self.recovered_task == task.task_id
+            or not self._active(task)
             or self.closed
         ):
             return outcome
         node = self.nodes[node_name]
         authority = (original.boot_id, original.control_epoch)
         current = await node.snapshot()
-        if not self._recoverable_state(step, current, authority, revision):
+        if not self._recoverable_state(step, current, authority, task):
             return outcome
         capabilities = await node.capabilities()
         if "observe" not in capabilities.skills or step.skill not in capabilities.skills:
             return outcome
-        self.recovery_revision = revision
+        if not self._active(task):
+            return "STALE"
+        self.recovered_task = task.task_id
         self.recoveries += 1
         observe = Step(step_id="recovery-" + new_id(), skill="observe")
-        observed, _, _ = await self._attempt(observe, node_name, revision, authority)
+        observed, _, _ = await self._attempt(observe, node_name, task, authority)
         if observed != "SUCCEEDED":
             return observed
         current = await node.snapshot()
-        if not self._recoverable_state(step, current, authority, revision):
+        if not self._recoverable_state(step, current, authority, task):
             return "BLOCKED"
         # Exactly one new action, with a fresh ID and receiver-issued authorization.
-        return (await self._attempt(step, node_name, revision, authority))[0]
+        return (await self._attempt(step, node_name, task, authority))[0]
 
-    def _recoverable_state(self, step, world, authority, revision):
+    def _recoverable_state(self, step, world, authority, task):
         return (
-            revision == self.revision
+            self._active(task)
             and not self.closed
             and (world.boot_id, world.control_epoch) == authority
             and world.admission == "OPEN"
             and world.stop_confirmed
             and world.active_action is None
-            and world.held_object is None
-            and world.objects.get(step.args.get("object")) not in {None, "gripper"}
-            and (world.kinematics is None or world.kinematics.valid)
+            and world.data.held_object is None
+            and world.data.objects.get(step.args.get("object")) not in {None, "gripper"}
+            and (world.data.kinematics is None or world.data.kinematics.valid)
         )
 
-    async def _attempt(self, step, node_name, revision, authority=None):
+    async def _attempt(self, step, node_name, task, authority=None):
         node = self.nodes[node_name]
         if self.registry:
-            await self.registry.refresh()
-            if self.registry.provider(step.skill) != node_name:
-                raise ValueError("provider_binding_changed")
-        world = await self._state(node)
-        if revision != self.revision or self.closed:
+            await self.registry.refresh([node_name])
+            if self.registry.node_for(step.skill) != node_name:
+                raise ValueError("node_binding_changed")
+        world = await node.context()
+        if self.registry:
+            self.registry.check_instance(node_name, world.boot_id)
+        if not self._active(task):
             return "STALE", None, world
         if authority is not None and (world.boot_id, world.control_epoch) != authority:
             return "STALE", None, world
@@ -375,8 +431,7 @@ class Runtime:
             world,
             step.skill,
             step.args,
-            task_id=self.task_id,
-            revision=revision,
+            task_id=task.task_id,
             version=step.version,
         )
         self.active_actions[step.step_id] = action.action_id
@@ -391,19 +446,24 @@ class Runtime:
                 if not receipt.accepted:
                     raise ValueError(receipt.reason)
                 status = receipt.status
+            if not self._active(task):
+                return "STALE", None, world
             self.action_history.append(
                 {
                     "action_id": action.action_id,
                     "skill": action.skill,
-                    "revision": revision,
+                    "task_id": task.task_id,
+                    "revision": 0,
                 }
             )
-            async with asyncio.timeout(SPECS[step.skill].timeout):
+            async with asyncio.timeout(SKILLS[step.skill].spec.timeout):
                 while status is not None and status.state not in TERMINAL:
-                    if revision != self.revision or self.closed:
+                    if not self._active(task):
                         return "STALE", None, world
                     await asyncio.sleep(0.01)
                     status = await node.status(action.action_id)
+            if not self._active(task):
+                return "STALE", None, world
             if status is None or status.state == "UNKNOWN":
                 raise ValueError("UNKNOWN: missing_or_inconclusive_status")
             if status.state == "SUCCEEDED" and status.verification != "PASS":
@@ -420,11 +480,13 @@ class Runtime:
             return self.registry.definitions[node_name]["type"] == "wrs"
         return (await self.nodes[node_name].capabilities()).robot_controls
 
-    async def _fence(self, node_name):
+    async def _fence(self, node_name, task=None):
         node = self.nodes[node_name]
         robot = await self._robot_controls(node_name)
         for _ in range(3):
             world = await self._state(node, control=True)
+            if task is not None and self.task is not task:
+                raise ValueError("stale_task")
             if not robot and world.active_action is None:
                 return ControlReceipt(
                     accepted=world.stop_confirmed,
@@ -437,27 +499,38 @@ class Runtime:
                 control_epoch=world.control_epoch,
                 action_id=world.active_action if not robot else None,
             )
-            result = await (node.hold(request) if robot else node.cancel(request))
+            result = await (node.control("hold", request) if robot else node.cancel(request))
             if result.accepted:
                 return result
             if result.reason != "stale_control":
                 raise ValueError(result.reason)
         raise ValueError("concurrent_control_change")
 
+    def _control_target(self, request):
+        if self.closed or request.task_id != self.task_id or self.task is None:
+            raise ValueError("stale_task")
+        return self.task
+
     async def hold(self, request: TaskControl):
         data = {"kind": "hold", **request.model_dump()}
         duplicate = self._duplicate(request.request_id, data)
         if duplicate is not None:
             return duplicate
+        task = self._control_target(request)
         if request.replacement is not None:
             raise ValueError("hold_does_not_accept_replacement")
-        self.revision += 1
+        if self.state not in {"RUNNING", "RESUMING", "HELD", "UNKNOWN"}:
+            raise ValueError("task_not_active")
+        self.planning_request_id = None
+        if self.planning_state == "WAITING":
+            self.planning_state = "STALE"
         self.state = "HELD"
+        self.hold_accepted = False
         self.queued.clear()
-        result = {"revision": self.revision, "state": "HELD", "phase": "PENDING"}
+        result = {"task_id": task.task_id, "revision": 0, "state": "HELD", "phase": "PENDING"}
         self.requests[request.request_id] = (data, result)
         receipts = await asyncio.gather(
-            *(self._fence(name) for name in self.nodes), return_exceptions=True
+            *(self._fence(name, task) for name in self.nodes), return_exceptions=True
         )
         accepted = all(not isinstance(r, Exception) and r.accepted for r in receipts)
         phase = (
@@ -468,6 +541,8 @@ class Runtime:
             if any(r.phase == "STOPPING" for r in receipts)
             else "STOPPED"
         )
+        if self.task is task:
+            self.hold_accepted = accepted and phase != "UNKNOWN"
         result.update(accepted=accepted, phase=phase)
         return result
 
@@ -476,58 +551,71 @@ class Runtime:
         duplicate = self._duplicate(request.request_id, data)
         if duplicate is not None:
             return duplicate
+        old = self._control_target(request)
         if request.replacement is None:
             raise ValueError("replacement_required")
-        plan = validate_plan(request.replacement)
+        task = _Task.create(request.replacement, supersedes=old.task_id)
         if self.state != "HELD":
             raise ValueError("explicit_hold_required_before_replacement")
-        self.revision += 1
-        revision = self.revision
-        self.state = "RESUMING"
+        if not self.hold_accepted:
+            raise ValueError("hold_pending_or_unconfirmed")
+        self._activate(task, "RESUMING")
         result = self.snapshot()
         self.requests[request.request_id] = (data, result)
-        self._spawn(self._resume_and_execute(plan, revision))
+        self._spawn(self._resume_and_execute(task))
         return result
 
-    async def _resume_and_execute(self, plan, revision):
+    async def _resume_and_execute(self, task):
+        plan = task.plan()
         try:
-            for node_name in {self.bindings[s.skill] for s in plan.steps}:
-                node = self.nodes[node_name]
+            stopped = {}
+            # A replacement cannot sidestep an unconfirmed stop on another old resource.
+            for node_name, node in self.nodes.items():
                 async with asyncio.timeout(3):
                     while True:
                         world = await self._state(node, control=True)
-                        if revision != self.revision or self.closed:
+                        if not self._active(task):
                             return
                         if world.admission == "UNKNOWN":
                             raise ValueError("UNKNOWN: stop_unconfirmed")
                         if world.stop_confirmed and world.active_action is None:
                             break
                         await asyncio.sleep(0.01)
-                if not await self._robot_controls(node_name):
+                stopped[node_name] = world
+            for node_name in {self.bindings[s.skill] for s in plan.steps}:
+                node, world = self.nodes[node_name], stopped[node_name]
+                robot = await self._robot_controls(node_name)
+                if not self._active(task):
+                    return
+                if not robot:
                     if world.admission != "OPEN":
-                        raise ValueError("provider_not_ready")
+                        raise ValueError("node_not_ready")
                     continue
-                result = await node.resume(
+                result = await node.control(
+                    "resume",
                     ControlRequest(
                         interrupt_id=new_id(),
                         boot_id=world.boot_id,
                         control_epoch=world.control_epoch,
                         world_version=world.world_version,
-                    )
+                    ),
                 )
                 if not result.accepted:
                     raise ValueError(result.reason)
-            if revision != self.revision or self.closed:
+            if not self._active(task):
                 return
             self.state, self.results = "RUNNING", {}
-            await self._execute(plan, revision)
+            await self._execute(task)
         except Exception as exc:
-            if revision == self.revision:
+            if self._active(task):
                 self.state, self.reason = "UNKNOWN", str(exc)[:240]
 
     async def close(self):
         self.closed = True
-        await self.hold(TaskControl(request_id=new_id()))
+        self.planning_request_id = None
+        self.state = "HELD"
+        self.queued.clear()
+        await asyncio.gather(*(self._fence(name) for name in self.nodes), return_exceptions=True)
         if self.planning and not self.planning.done():
             self.planning.cancel()
         await asyncio.gather(*list(self.workers), return_exceptions=True)

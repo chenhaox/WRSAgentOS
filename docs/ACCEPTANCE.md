@@ -193,3 +193,86 @@ TTS 局部取消/WRS 停止、任务依赖/进度迭代、异常/KeyboardInterru
 以及 timeout=None 兼容。
 
 仍仅 Mock 音频与 WRS FK 虚拟结果；没有真实 GLM、ASR/TTS 或硬件调用。
+
+
+## API 小步简化（2026-09-17）
+
+基线 b69bd7a；实际 verify --wrs：134 unit + 32 Zenoh/Mock + 5 WRS virtual =
+171 passed，0 failed/errors/skipped。示例、doctor、Ruff 通过；客户端命名清理后网络回归
+32 passed，02/05 示例和 Ruff 再次通过。语义、公开名字、命令和限制统一记录在
+[api_simplification.md](api_simplification.md)，证据 reports/api_simplification_summary.json。
+未调用真实 GLM、音频或硬件；没有新增延迟保证。按要求未 commit/push。
+
+
+## 不可变任务身份与 Zenoh Liveliness（2026-09-18）
+
+命令：`./scripts/run.ps1 scripts/verify.py --wrs`。
+**144 unit + 37 Zenoh/Mock + 5 WRS virtual = 186 passed**；0 failed/errors/skipped，保留前轮 171 的行为回归，新增 15 用例。
+37 项网络组运行时 deselect 5 项 WRS；WRS 组独立运行全部 5 项，未将 deselection 计为通过。
+所有示例、Ruff、doctor PASS。报告 reports/task_liveliness_summary.json、acceptance.json、JUnit。
+02 示例验证 replacement 的新 ID 与 supersedes；新网络测试为 test_task_identity.py、
+test_liveliness.py，覆盖旧控制/规划拒绝、重启和能力缓存失效、重复实例、在线但 held、
+无关 TTS 离线不被机器人动作查询。原 Registry 过期测试迁移为原生离线事件测试；
+进程退出后等待网络离线通知，不能把 terminate 返回当作通知已经送达。
+
+完整 API 变化、兼容字段、命令及限制见 [api_simplification.md](api_simplification.md)。
+WRS 仍只验证虚拟 Lite6 FK；未新增 pick/place 或实机能力。GLM 仅离线夹具，缓存调用
+计数仍为 1→1→2→3；未访问真实模型/音频/硬件。控制 worker 排队问题和延迟测量留待后续。
+
+
+## 分级同步教程与职责精简（2026-09-18）
+
+实际命令：`./scripts/run.ps1 scripts/verify.py --wrs`。
+146 单元 + 42 真实 Zenoh/Mock + 5 WRS 虚拟 = **193 passed**，0 failed/errors/skipped。
+相对 186 增加 7 个用例；原非法工具参数测试移到最终决策校验边界，没有删去错误情形。
+新增高频状态读取不消耗/挤掉授权、进度事件无凭证、真实网络查询后准入、非法 GLM
+计划零动作，以及同步入口通过独立 Agent 复用计划并保持新 task/action ID。
+全部分级示例、Ruff 和 doctor PASS，缓存示例计数仍为 1→1→2→3。
+报告 reports/api_levels_summary.json、acceptance.json、unit.xml、zenoh.xml、wrs.xml。
+示例新入口见 [examples/README.md](../examples/README.md)，旧平铺路径已迁移；
+03 的 WRS 完成/取消均在新 tasks 路径通过。历史章节中的旧命令仅记录当时执行位置。
+WorldSnapshot 不含 lease_id，ActionContext 含当前状态和执行凭证；TTS 的机器人可选字段为空，
+并没有新增机器人控制接口。GLM 原生协议解析与 ModelPlanner 计划校验分开，权限/执行检查保持。
+仍未验证真实 GLM/音频/实机/双机身份与端到端延迟，不把这些列为 PASS。
+
+
+## 全库冗余清理（2026-09-18）
+
+命令：`./scripts/run.ps1 scripts/verify.py --wrs`。
+**151 单元 + 42 真实 Zenoh/Mock + 5 WRS 虚拟 = 198 passed**，0 failed/errors/skipped。
+全部分级示例、WRS 完成/取消、Ruff、doctor PASS；CLI --help 通过。
+新增 6 项显式绑定/CLI 门禁用例；删除 1 项专门验证已移除导入别名的测试，保留动作语义检查。
+已有自定义节点名的集成测试增加「节点启动后不重读配置」断言。
+初次子集的 3 项失败均为旧私有启动函数引用，迁移后完整回归通过。
+证据 reports/library_cleanup_summary.json、acceptance.json 和 unit/zenoh/wrs.xml。
+目录和低层 API 迁移见 [api_simplification.md](api_simplification.md) 文末。
+普通 launch/action/start/goal/wait 不变；缓存模型调用仍为 1→1→2→3。
+未验证真实 GLM、音频、硬件、跨机 ACL 和延迟；没有新增机器人能力或外部服务调用。
+
+
+## 节点状态与技能注册（2026-09-18）
+
+完整验收：`./scripts/run.ps1 scripts/verify.py --wrs`。
+**162 unit + 43 Zenoh/Mock + 5 WRS virtual = 210 passed**；0 failed/errors/skipped。
+所有分级示例、WRS 完成/取消、Ruff 和 doctor PASS；缓存调用仍为 1→1→2→3。
+新增 7 项快照边界、4 项注册校验与执行、1 项真实 Zenoh 错误部署绑定测试。
+既有 TTS 空机器人字段断言改为类型隔离检查，其去重、取消和恢复断言保留。
+证据 reports/typed_nodes_summary.json、acceptance.json、unit/zenoh/wrs.xml；
+切片证据 typed_state_boundary.xml（15 passed）、registered_skills.xml（36 passed）。
+未新增源码模块或依赖；既有示例迁移到 snapshot().data。公开字段迁移见 api_simplification.md 文末。
+真实 GLM、音频、实机、跨机 ACL 和延迟未验证；Voice 单 worker 等待 TTS 的限制保留。
+WRS 仅虚拟 Lite6 FK，无新增抓取能力。没有 commit/push。
+
+
+## 统一客户端与启动/连接（2026-09-18）
+
+`./scripts/run.ps1 scripts/verify.py --wrs`：173 unit、47 Zenoh/Mock、全部示例、Ruff、doctor 通过；
+首次 WRS 4 passed/1 failed。旧测试遍历全部连接，误把 Voice 当动作节点；保留原断言并限定 WRS/TTS。
+`./scripts/run.ps1 -m pytest -q tests/integration -m wrs --junitxml=reports/wrs.xml`：复测 5 passed。
+最终 **225 passed（173 + 47 + 5），0 failed/errors/skipped**；首次失败证据未删除。
+新增 15 项回归，包含单独 TTS、另一 Python 程序同步连接、客户端异常退出仍继续动作、
+重新连接查询原 action_id、配置节点晚到，以及部分连接失败清理和输入校验。
+WRS/TTS 共用 ActionClient，TTS 仍无 hold/resume 服务；既有抢占、并发、迟到结果、去重回归保留。
+证据 reports/launch_connect_summary.json、acceptance.json、unit/zenoh/wrs.xml、launch_wrs_initial_failure.txt。
+模型为 Mock/HTTP 夹具，音频为回放/Mock TTS，WRS 为 Lite6 虚拟 FK；实机、GLM 真实服务、
+真实音频、跨机 ACL 与延迟指标未验证；不新增相关能力或测试主张。

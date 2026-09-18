@@ -118,22 +118,39 @@ class KinematicState(Boundary):
     valid: bool = True
 
 
-class ActionContext(Boundary):
-    boot_id: Name
-    control_epoch: Counter
-    world_version: Counter
-    lease_id: Name
-    admission: Literal["OPEN", "HELD", "UNKNOWN"]
-    facts: dict[Name, Scalar] = Field(default_factory=dict)
-    active_action: Name | None
-    stop_confirmed: bool
-
-
-class WorldSnapshot(ActionContext):
+class RobotData(Boundary):
+    kind: Literal["robot"] = "robot"
     held_object: Name | None = None
-    objects: dict[Name, Name] = Field(default_factory=dict)
+    objects: dict[Name, Name] = Field(default_factory=dict, max_length=128)
     pose: Name | None = None
     kinematics: KinematicState | None = None
+    facts: dict[Name, Scalar] = Field(default_factory=dict, max_length=32)
+
+
+class SpeechData(Boundary):
+    kind: Literal["speech"] = "speech"
+    completed: Counter = 0
+    last_text: str = Field(default="", max_length=512)
+
+
+class NodeSnapshot(Boundary):
+    """One execution node at capture time; never an atomic whole-system view or grant."""
+
+    node_id: Name
+    boot_id: Name
+    captured_at_ns: int = Field(gt=0)  # Source wall clock; not a cross-host lease clock.
+    control_epoch: Counter
+    world_version: Counter  # Existing wire name for this node's business-state version.
+    admission: Literal["OPEN", "HELD", "UNKNOWN"]
+    active_action: Name | None
+    stop_confirmed: bool
+    data: Annotated[RobotData | SpeechData, Field(discriminator="kind")]
+
+
+class ActionContext(NodeSnapshot):
+    """Current node state plus a short-lived, receiver-issued execution token."""
+
+    lease_id: Name
 
 
 class CapabilitySnapshot(Boundary):
@@ -190,6 +207,7 @@ class TaskRequest(Boundary):
 
 class TaskControl(Boundary):
     request_id: Name
+    task_id: Name
     replacement: Plan | None = None
 
 

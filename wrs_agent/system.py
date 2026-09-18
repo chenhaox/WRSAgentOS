@@ -1,11 +1,11 @@
 """Small local user API. Every call still crosses the existing Zenoh boundary."""
 
 import asyncio
-from contextlib import asynccontextmanager
+import os
+from contextlib import AsyncExitStack, asynccontextmanager
 
-from wrs_agent.bindings import load_nodes
-from wrs_agent.nodes.api import ActionClient, RobotClient, action_request
-from wrs_agent.processes import LocalStack
+from wrs_agent.bindings import load_bindings
+from wrs_agent.nodes.actions import ActionClient, action_request
 from wrs_agent.registry import NodeRegistry
 from wrs_agent.schemas import (
     TERMINAL,
@@ -16,6 +16,8 @@ from wrs_agent.schemas import (
     Step,
     new_id,
 )
+from wrs_agent.skills import lookup_skills
+from wrs_agent.transport import Transport
 
 
 def step(skill, *, after=(), **args):
@@ -30,7 +32,7 @@ def step(skill, *, after=(), **args):
 
 
 class Action:
-    """A submitted action: receipt is acceptance; wait/status report verified completion."""
+    """A submitted action. wait() returns terminal status; inspect state/verification."""
 
     def __init__(self, client, request, receipt):
         self.client, self.request, self.receipt = client, request, receipt
@@ -51,8 +53,9 @@ class Action:
                 await asyncio.sleep(0.02)
 
     async def cancel(self):
+        """Request cancellation; receipt.phase distinguishes STOPPING from STOPPED."""
         if self._cancel_request is None:
-            state = await self.client.context(control=True)
+            state = await self.client.snapshot(control=True)
             self._cancel_request = ControlRequest(
                 interrupt_id=new_id(),
                 boot_id=self.request.boot_id,
@@ -63,45 +66,114 @@ class Action:
 
 
 class System:
-    """Connect to an owned LocalStack; local() supervises and cleans up its processes."""
+    """A connection to configured nodes; local() additionally owns local processes."""
 
-    def __init__(self, stack):
-        self.stack = stack
-        definitions, bindings = load_nodes(stack.bindings_path)
-        buses = stack.node_transports
-        self.agent = buses[stack.roles["agent"]]
-        self.registry = NodeRegistry(buses, definitions, bindings)
+    def __init__(self, transports, definitions, bindings, *, endpoint, site, env_id):
+        self.endpoint, self.site, self.env_id = endpoint, site, env_id
+        self.definitions = definitions
+        self.bindings = bindings
+        self._transports = transports
+        self._local_stack = None  # Only for local process diagnostics, never needed to connect.
+        self.roles = {}
+        for name, definition in definitions.items():
+            if definition["enabled"]:
+                role = definition["type"]
+                if role in self.roles:
+                    raise ValueError("one_node_per_role_in_v1")
+                self.roles[role] = name
+        self.registry = NodeRegistry(transports, definitions, bindings)
         self.clients = {
-            name: (RobotClient(bus) if definitions[name]["type"] == "wrs" else ActionClient(bus))
-            for name, bus in stack.node_transports.items()
+            name: ActionClient(bus)
+            for name, bus in transports.items()
             if definitions[name]["actions"]
         }
-        self.bindings = bindings
+
+    def _role(self, role):
+        if role not in self.roles:
+            raise ValueError(f"node_role_not_configured: {role}")
+        return self.roles[role]
+
+    @property
+    def agent(self):
+        return self._transports[self._role("agent")]
 
     @classmethod
     @asynccontextmanager
-    async def local(cls, *, backend="mock", duration=0.4, bindings=None):
+    async def connect(
+        cls,
+        endpoint="tcp/127.0.0.1:7447",
+        *,
+        site="local",
+        env_id="arm01",
+        bindings=None,
+        _token=None,
+        _config=None,
+    ):
+        """Connect without starting/stopping nodes; credentials come from WRS_AGENT_TOKEN.
+
+        _token/_config are the launcher's already-resolved session, not a second user config.
+        Online/readiness checks happen when nodes/skills/actions are queried.
+        """
+        definitions, skill_bindings = _config if _config is not None else load_bindings(bindings)
+        definitions = {name: dict(node) for name, node in definitions.items()}
+        skill_bindings = dict(skill_bindings)
+        token = os.environ.get("WRS_AGENT_TOKEN", "") if _token is None else _token
+        if not 16 <= len(token) <= 128:
+            raise ValueError("Set WRS_AGENT_TOKEN to a session credential of 16 to 128 characters")
+        async with AsyncExitStack() as cleanup:
+            transports, by_suffix = {}, {}
+            for name, definition in definitions.items():
+                if not definition["enabled"]:
+                    continue
+                suffix = definition["suffix"]
+                if suffix not in by_suffix:
+                    bus = Transport(endpoint, site, env_id + suffix, token, "input")
+                    cleanup.push_async_callback(bus.close)
+                    by_suffix[suffix] = bus
+                transports[name] = by_suffix[suffix]
+            yield cls(
+                transports, definitions, skill_bindings, endpoint=endpoint, site=site, env_id=env_id
+            )
+
+    @classmethod
+    @asynccontextmanager
+    async def local(
+        cls, *, backend="mock", duration=0.4, bindings=None, port=0, site="local", env_id=None
+    ):
+        from wrs_agent.processes import LocalStack
+
         async with LocalStack(
             backend=backend,
             duration=duration,
-            voice=True,
             bindings=bindings,
+            port=port,
+            site=site,
+            env_id=env_id,
         ) as stack:
-            yield cls(stack)
+            yield stack.system
 
     async def nodes(self):
         """Fresh node observations, queried directly, even if Agent is unavailable."""
         return await self.registry.refresh()
 
+    async def skills(self, query=""):
+        """Find skills available on ready nodes; this does not invoke Planner."""
+        online = await self.nodes()
+        names = [name for name in self.clients if online.get(name, {}).get("ready")]
+        caps = await asyncio.gather(
+            *(self.registry.capabilities(name, self.clients[name]) for name in names)
+        )
+        return lookup_skills(query, dict(zip(names, caps, strict=True)), self.bindings)
+
     async def start(self, *steps):
-        """Submit a structured task to Agent and return immediately."""
+        """Return the accepted task snapshot; physical execution can start later."""
         plan = Plan(steps=list(steps))
         return await self.agent.request(
             "request/task/start", {"request_id": new_id(), "plan": plan.model_dump()}
         )
 
     async def goal(self, text):
-        """Ask the configured Planner; the default local profile uses Mock."""
+        """Return a planning request ID; status exposes a task ID after plan validation."""
         return await self.agent.request("request/task/goal", {"request_id": new_id(), "goal": text})
 
     async def status(self):
@@ -129,14 +201,18 @@ class System:
 
     async def action(self, skill, **args):
         """Explicit direct action; choose provider from configuration, never from model text."""
-        await self.nodes()
-        client = self.clients[self.registry.provider(skill)]
+        if skill not in self.bindings:
+            raise ValueError("unknown_skill")
+        name = self.bindings[skill]
+        await self.registry.refresh([name])
+        client = self.clients[self.registry.node_for(skill)]
+        context = await client.context()
+        self.registry.check_instance(name, context.boot_id)
         request = action_request(
-            await client.context(),
+            context,
             skill,
             args,
             task_id=new_id(),
-            revision=0,
         )
         try:
             receipt = await client.submit(request)
@@ -152,32 +228,34 @@ class System:
         return Action(client, request, receipt)
 
     async def snapshot(self, node=None):
-        """Robot-specific observation; not required of TTS or other providers."""
-        node = node or self.stack.roles["wrs"]
-        if not isinstance(self.clients[node], RobotClient):
-            raise ValueError("robot_snapshot_unsupported")
+        """Read one action node directly; defaults to the robot, never aggregates nodes."""
+        node = node or self._role("wrs")
+        if node not in self.clients:
+            raise ValueError("node_snapshot_unsupported")
         return await self.clients[node].snapshot()
 
     async def resume(self, node=None):
         """Explicit admission only. This never resumes an old action."""
-        client = self.clients[node or self.stack.roles["wrs"]]
-        if not isinstance(client, RobotClient):
+        node = node or self._role("wrs")
+        if self.definitions.get(node, {}).get("type") != "wrs" or node not in self.clients:
             raise ValueError("robot_resume_unsupported")
+        client = self.clients[node]
         state = await client.snapshot(control=True)
-        return await client.resume(
+        return await client.control(
+            "resume",
             ControlRequest(
                 interrupt_id=new_id(),
                 boot_id=state.boot_id,
                 control_epoch=state.control_epoch,
                 world_version=state.world_version,
-            )
+            ),
         )
 
     async def replay(self, kind):
         """Replay a verified intent through Voice, not ASR or a language classifier."""
         event = Interaction(event_id=new_id(), kind=kind)
         control = kind in {"stop", "barge_in"}
-        return await self.stack.node_transports[self.stack.roles["voice"]].request(
+        return await self._transports[self._role("voice")].request(
             "request/voice/control" if control else "request/voice/event",
             event.model_dump(),
             control=control,

@@ -1,26 +1,27 @@
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
 from wrs_agent.cache import PlanCache, parse_intent
-from wrs_agent.schemas import CapabilitySnapshot, Plan, Step, WorldSnapshot
-from wrs_agent.skills import SPECS
+from wrs_agent.schemas import ActionContext, CapabilitySnapshot, NodeSnapshot, Plan, RobotData, Step
+from wrs_agent.skills import SKILLS
 
 BINDINGS = {name: "wrs" for name in ("observe", "pick", "place", "verify")}
 
 
 def context():
     worlds = {
-        "wrs": WorldSnapshot(
+        "wrs": NodeSnapshot(
+            node_id="wrs",
+            captured_at_ns=1,
             boot_id="boot",
             control_epoch=0,
             world_version=0,
-            lease_id="lease",
             admission="OPEN",
             active_action=None,
             stop_confirmed=True,
-            objects={"A": "table", "D": "table"},
-            facts={"calibration": "v1"},
+            data=RobotData(objects={"A": "table", "D": "table"}, facts={"calibration": "v1"}),
         )
     }
     caps = {"wrs": CapabilitySnapshot(skills=list(BINDINGS))}
@@ -59,13 +60,12 @@ def test_strict_hit_unrelated_change_new_authority_and_no_cached_grants():
     cache = PlanCache()
     worlds, caps = context()
     assert cache.remember("把 A 放到 B", plan(), worlds, caps, BINDINGS)
-    changed = worlds["wrs"].model_copy(
+    changed = ActionContext(**worlds["wrs"].model_dump(), lease_id="new-lease").model_copy(
         update={
             "boot_id": "new-boot",
             "control_epoch": 8,
-            "lease_id": "new-lease",
             "world_version": 10,
-            "objects": {"A": "table", "D": "C"},
+            "data": worlds["wrs"].data.model_copy(update={"objects": {"A": "table", "D": "C"}}),
         }
     )
     hit = cache.lookup("put A in B", {"wrs": changed}, caps, BINDINGS)
@@ -87,13 +87,19 @@ def test_applicability_change_rejects(change, monkeypatch):
     bindings = dict(BINDINGS)
     world = worlds["wrs"]
     if change == "location":
-        worlds["wrs"] = world.model_copy(update={"objects": {"A": "C"}})
+        worlds["wrs"] = world.model_copy(
+            update={"data": world.data.model_copy(update={"objects": {"A": "C"}})}
+        )
     elif change == "calibration":
-        worlds["wrs"] = world.model_copy(update={"facts": {"calibration": "v2"}})
+        worlds["wrs"] = world.model_copy(
+            update={"data": world.data.model_copy(update={"facts": {"calibration": "v2"}})}
+        )
     elif change == "capabilities":
         caps["wrs"] = CapabilitySnapshot(skills=["observe"])
     elif change == "held":
-        worlds["wrs"] = world.model_copy(update={"held_object": "A"})
+        worlds["wrs"] = world.model_copy(
+            update={"data": world.data.model_copy(update={"held_object": "A"})}
+        )
     elif change == "unknown":
         worlds["wrs"] = world.model_copy(update={"admission": "UNKNOWN"})
     elif change == "schema":
@@ -101,7 +107,11 @@ def test_applicability_change_rejects(change, monkeypatch):
     elif change == "binding":
         bindings["pick"] = "different-node"
     else:
-        monkeypatch.setitem(SPECS, "pick", SPECS["pick"].model_copy(update={"version": 2}))
+        monkeypatch.setitem(
+            SKILLS,
+            "pick",
+            replace(SKILLS["pick"], spec=SKILLS["pick"].spec.model_copy(update={"version": 2})),
+        )
     assert cache.lookup("put A in B", worlds, caps, bindings) is None
     assert cache.reject_reason
 
@@ -116,3 +126,19 @@ def test_only_exact_verified_plan_structure_and_bounded_failure_records():
     cache.invalidate("put A in B", "postcondition_failed")
     assert cache.lookup("put A in B", worlds, caps, BINDINGS) is None
     assert cache.failures["transfer:A:B"] == "postcondition_failed"
+
+
+def test_changed_skill_guidance_invalidates_cached_plan(monkeypatch):
+    cache = PlanCache()
+    worlds, caps = context()
+    assert cache.remember("put A in B", plan(), worlds, caps, BINDINGS)
+    monkeypatch.setitem(
+        SKILLS,
+        "pick",
+        replace(
+            SKILLS["pick"],
+            spec=SKILLS["pick"].spec.model_copy(update={"instructions": "changed guidance"}),
+        ),
+    )
+    assert cache.lookup("put A in B", worlds, caps, BINDINGS) is None
+    assert cache.reject_reason

@@ -13,9 +13,9 @@ import tempfile
 import time
 from pathlib import Path
 
-from wrs_agent.bindings import load_bindings, load_nodes
+from wrs_agent.bindings import load_bindings
 from wrs_agent.schemas import new_id
-from wrs_agent.transport import Transport
+from wrs_agent.system import System
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = Path(r"D:\code\venv312\.venv\Scripts\python.exe")
@@ -41,7 +41,7 @@ class InstanceLock:
             msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError:
             self.file.close()
-            raise RuntimeError("environment_already_running") from None
+            raise RuntimeError("node_already_running") from None
 
     def close(self):
         self.file.close()
@@ -70,12 +70,11 @@ class LocalStack:
     def __init__(
         self,
         *,
-        runtime=True,
         duration=0.4,
         fault=None,
         port=0,
-        tts=True,
-        voice=False,
+        site="local",
+        env_id=None,
         deferred=False,
         backend="mock",
         model_provider="mock",
@@ -88,12 +87,12 @@ class LocalStack:
             raise ValueError("invalid_model_provider_or_missing_live_opt_in")
         self.model_provider, self.live_model = model_provider, live_model
         self.backend = backend
-        self.with_runtime, self.duration, self.fault = runtime, duration, fault
-        self.with_tts, self.with_voice, self.deferred = tts, voice, deferred
-        self.node_transports = {}
+        self.duration, self.fault, self.deferred = duration, fault, deferred
+        self.system = None
+        self._connection = None
+        self.started = []
         self.bindings_path = Path(bindings).resolve() if bindings else None
-        self.definitions, self.skill_bindings = load_nodes(self.bindings_path)
-        self.node_suffixes, _ = load_bindings(self.bindings_path)
+        self.definitions, self.skill_bindings = load_bindings(self.bindings_path)
         self.roles = {}
         for name, definition in self.definitions.items():
             if definition["enabled"]:
@@ -101,13 +100,26 @@ class LocalStack:
                 if role in self.roles:
                     raise ValueError("one_node_per_role_in_local_profile")
                 self.roles[role] = name
-        self.port = port
-        self.site = "local"
-        self.env_id = backend + "-" + new_id()[:12]
-        self.token = secrets.token_urlsafe(32)
+        if any(role not in {"wrs", "tts", "agent", "voice"} for role in self.roles):
+            raise ValueError("node_type_not_implemented")
+        if "voice" in self.roles and not {"wrs", "tts", "agent"}.issubset(self.roles):
+            raise ValueError("voice_requires_wrs_tts_agent")
+        self.port, self.site = port, site
+        self.env_id = env_id or backend + "-" + new_id()[:12]
+        if not all(
+            re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", value)
+            for value in (
+                site,
+                self.env_id,
+                *(self.env_id + d["suffix"] for d in self.definitions.values()),
+            )
+        ) or self.env_id in {".", ".."}:
+            raise ValueError("invalid_namespace")
+        self.token = os.environ.get("WRS_AGENT_TOKEN") or secrets.token_urlsafe(32)
+        if not 16 <= len(self.token) <= 128:
+            raise ValueError("WRS_AGENT_TOKEN must contain 16 to 128 characters")
         self.processes = []
         self.logs = []
-        self.transport = None
         self.directory = ROOT / ".local/runs" / self.env_id
 
     def _spawn(self, name, command):
@@ -170,27 +182,26 @@ class LocalStack:
             "--duration",
             self.duration,
         )
-        node_type = {"environment": "wrs", "runtime": "agent"}.get(role, role)
-        result.extend(["--node-id", self.roles[node_type]])
+        result.extend(["--node-id", self.roles[role]])
         if self.bindings_path:
             result.extend(["--bindings", str(self.bindings_path)])
-        if role == "environment":
+        if role == "wrs":
             result.extend(["--backend", self.backend])
-        if role == "runtime" and self.model_provider == "glm":
+        if role == "agent" and self.model_provider == "glm":
             result.extend(["--model-provider", "glm", "--live-model"])
-        if self.deferred and role == "runtime":
+        if self.deferred and role == "agent":
             result.append("--deferred-planner")
         if self.fault:
             result.extend(["--fault", self.fault])
         return result
 
-    async def _ready(self, suffix, bus=None):
+    async def _wait_ready(self, bus, key):
         async with asyncio.timeout(10):
             while True:
                 if any(p.poll() is not None for p in self.processes):
                     raise RuntimeError(f"Node exited; see {self.directory}")
                 try:
-                    return await (bus or self.transport).request(suffix, {}, timeout=0.5)
+                    return await bus.request(key, {}, timeout=0.5)
                 except TimeoutError:
                     await asyncio.sleep(0.02)
 
@@ -198,69 +209,50 @@ class LocalStack:
         self.directory.mkdir(parents=True, exist_ok=True)
         try:
             await asyncio.to_thread(self.start_router)
-            self._spawn("environment", self.node_command("environment"))
-            self.transport = Transport(
+            self._connection = System.connect(
                 self.endpoint,
-                self.site,
-                self.env_id + self.definitions[self.roles["wrs"]]["suffix"],
-                self.token,
-                "input",
+                site=self.site,
+                env_id=self.env_id,
+                _token=self.token,
+                _config=(self.definitions, self.skill_bindings),
             )
-            await self._ready("request/capabilities")
-            self.node_transports[self.roles["wrs"]] = self.transport
-            if self.with_tts:
-                self._spawn("tts", self.node_command("tts"))
-                tts_bus = Transport(
-                    self.endpoint,
-                    self.site,
-                    self.env_id + self.node_suffixes[self.roles["tts"]],
-                    self.token,
-                    "input",
+            self.system = await self._connection.__aenter__()
+            self.system._local_stack = self
+            # Only enabled TOML nodes start. Order keeps existing Voice dependencies explicit.
+            for role in ("wrs", "tts", "agent", "voice"):
+                if role not in self.roles:
+                    continue
+                node_id = self.roles[role]
+                self._spawn(role, self.node_command(role))
+                self.started.append(node_id)
+                key = (
+                    "request/capabilities"
+                    if self.definitions[node_id]["actions"]
+                    else "request/task/status"
+                    if role == "agent"
+                    else "request/health"
                 )
-                self.node_transports[self.roles["tts"]] = tts_bus
-                await self._ready("request/capabilities", tts_bus)
-            if self.with_runtime:
-                self._spawn("runtime", self.node_command("runtime"))
-                agent_bus = Transport(
-                    self.endpoint,
-                    self.site,
-                    self.env_id + self.definitions[self.roles["agent"]]["suffix"],
-                    self.token,
-                    "input",
-                )
-                self.node_transports[self.roles["agent"]] = agent_bus
-                await self._ready("request/task/status", agent_bus)
-            if self.with_voice:
-                self._spawn("voice", self.node_command("voice"))
-                voice_bus = Transport(
-                    self.endpoint,
-                    self.site,
-                    self.env_id + self.definitions[self.roles["voice"]]["suffix"],
-                    self.token,
-                    "input",
-                )
-                self.node_transports[self.roles["voice"]] = voice_bus
-                await self._ready("request/health", voice_bus)
+                await self._wait_ready(self.system._transports[node_id], key)
             return self
         except BaseException:
             await self.__aexit__(None, None, None)
             raise
 
     async def __aexit__(self, *exc):
-        if self.transport:
-            # Graceful node shutdown uses the independent control lane.
-            for role, bus in [
-                ("voice", self.node_transports.get(self.roles.get("voice"))),
-                ("runtime", self.node_transports.get(self.roles.get("agent"))),
-                ("tts", self.node_transports.get(self.roles.get("tts"))),
-                ("environment", self.transport),
-            ]:
-                if bus is not None:
+        try:
+            if self.system is not None:
+                for node_id in reversed(self.started):
+                    role = self.definitions[node_id]["type"]
                     with contextlib.suppress(Exception):
-                        await bus.request(f"request/{role}/shutdown", {}, timeout=1, control=True)
-            for bus in set(self.node_transports.values()) | {self.transport}:
-                await bus.close()
-        await asyncio.to_thread(self._reap)
+                        await self.system._transports[node_id].request(
+                            f"request/{role}/shutdown",
+                            {},
+                            timeout=1,
+                            control=True,
+                        )
+                await self._connection.__aexit__(None, None, None)
+        finally:
+            await asyncio.to_thread(self._reap)
 
     def _reap(self):
         for process in reversed(self.processes):

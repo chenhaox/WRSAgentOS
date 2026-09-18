@@ -1,20 +1,20 @@
-"""Deployment chooses providers. Skill metadata never grants endpoint authority."""
+"""Deployment chooses execution nodes. Skill metadata never grants endpoint authority."""
 
 import re
 import tomllib
 from pathlib import Path
 
-from wrs_agent.skills import SPECS
+from wrs_agent.skills import SKILLS
 
 DEFAULT = Path(__file__).resolve().parents[1] / "configs/bindings.toml"
 
 
-def load_nodes(path=None):
+def load_bindings(path=None):
     config = tomllib.loads(Path(path or DEFAULT).read_text(encoding="utf-8"))
     if set(config) != {"nodes", "skills"} or not 1 <= len(config["nodes"]) <= 16:
         raise ValueError("invalid_bindings")
-    if set(config["skills"]) != set(SPECS):
-        raise ValueError("incomplete_bindings")
+    if not set(config["skills"]).issubset(SKILLS):
+        raise ValueError("unknown_skill_binding")
     endpoints = set()
     for name, node in config["nodes"].items():
         if (
@@ -33,10 +33,5 @@ def load_nodes(path=None):
             endpoints.add(node["suffix"])
     for node_id in config["skills"].values():
         if node_id not in config["nodes"] or not config["nodes"][node_id]["actions"]:
-            raise ValueError("invalid_skill_provider")
+            raise ValueError("invalid_skill_node")
     return config["nodes"], config["skills"]
-
-
-def load_bindings(path=None):
-    nodes, skills = load_nodes(path)
-    return {n: d["suffix"] for n, d in nodes.items() if d["actions"]}, skills
