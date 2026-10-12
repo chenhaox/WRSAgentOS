@@ -1,11 +1,11 @@
-"""Resident YOLO, SAM3, and GraspNet nodes. Each owns one model process."""
+"""Resident YOLO, SAM3, GraspNet, and graspability nodes. Each owns one process."""
 
 import asyncio
 from pathlib import Path
 
 from wrs_agent.executor import ActionExecutor
 from wrs_agent.nodes import Node
-from wrs_agent.nodes.vision.skills import DETECT, INFER_GRASPS, SEGMENT
+from wrs_agent.nodes.vision.skills import DETECT, GRASPABILITY, INFER_GRASPS, SEGMENT
 from wrs_agent.nodes.vision.state import VisionState
 from wrs_agent.nodes.vision.worker import ModelWorker, vision_python
 
@@ -64,3 +64,9 @@ class GraspNetNode(_VisionNode):
     features = ("vision.grasp",)
     worker_script = "graspnet_main.py"
     skill = INFER_GRASPS
+
+
+class GraspabilityNode(_VisionNode):
+    features = ("vision.graspability",)
+    worker_script = "graspability_main.py"
+    skill = GRASPABILITY

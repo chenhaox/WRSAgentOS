@@ -1,4 +1,4 @@
-"""远程按住说话：麦克风在打开页面的设备上，识别和 UR7e 在本机。
+"""远程按住说话：麦克风在打开页面的设备上，动作发给 HTDW-4530-02-DNE。
 
 先运行 05_start_wrs_voice.py。用 qwen-asr 环境启动本文件。
 本机或 SSH 端口转发打开 http://127.0.0.1:8010 （浏览器把这当成本机，可以直接用麦克风）。
@@ -8,6 +8,8 @@ Zenoh 仍只在 127.0.0.1。页面只接收一段 16 kHz 单声道浮点音频�
 
 import asyncio
 import json
+import os
+import queue
 import ssl
 import subprocess
 import threading
@@ -17,14 +19,26 @@ from pathlib import Path
 import numpy as np
 
 from examples._session import use_local_token
-from examples.voice.commands import COMMANDS, normalize
-from wrs_agent import System, step
+from examples.voice.commands import COMMANDS, fafu_payload, normalize, parse_centimeter_move
+from wrs_agent import System
+from wrs_agent.nodes.vision.announce import asks_what_is_there, desktop_utterance
+from wrs_agent.nodes.vision.speech import grasp_prompt, object_name
 from wrs_agent.policy import text_intent
-from wrs_agent.schemas import TERMINAL, TextInput
+from wrs_agent.schemas import TextInput
 from wrs_agent.nodes.asr.qwen import QwenASR
 
 CONFIG = Path(__file__).with_name("wrs_bindings.toml")
-CERT_DIR = Path(__file__).resolve().parents[2] / ".local/remote-mic"
+ROOT = Path(__file__).resolve().parents[2]
+CERT_DIR = ROOT / ".local/remote-mic"
+FRAME = Path("/tmp/wrs-live/frame.jpg")
+DEPTH = Path("/tmp/wrs-live/depth.npy")
+CAMERA = Path("/tmp/wrs-live/camera.json")
+CLOUD = Path("/tmp/wrs-live/grasp-cloud.npy")
+PREVIEW = Path("/tmp/wrs-live/preview.jpg")
+OVERLAY = Path("/tmp/wrs-live/overlay.json")
+ASKS = ("有什么", "有哪些", "有啥")
+FAFU_PYTHON = Path.home() / "miniconda3/envs/panthera/bin/python"
+FAFU_SCRIPT = ROOT / "examples/voice/fafu_voice_arm.py"
 HTTP_PORT = 8010
 HTTPS_PORT = 8443
 RATE = 16000
@@ -47,8 +61,9 @@ PAGE = """<!DOCTYPE html>
 </style>
 </head>
 <body>
-<h1>远程语音控制 UR7e</h1>
-<p>按住按钮说话，松开后识别。麦克风用的是这台设备，机械臂在运行页面服务的那台机器上。</p>
+<h1>远程语音控制</h1>
+<p>按住按钮说话，松开后识别。麦克风和播报都用打开这个页面的电脑。说「向上5厘米」按厘米数移动。说「抓住杯子」会在这块深度里计算抓取点。问「有什么」会读出画面里的物体。</p>
+<img id="camera" alt="相机" src="/preview.jpg" style="max-width:640px;width:100%;background:#ddd" />
 <button id="talk" type="button">按住说话</button>
 <p id="status">待命</p>
 <p id="heard">最近识别：（无）</p>
@@ -78,9 +93,28 @@ function resample(input, fromRate) {
   return out;
 }
 
+function prepareSpeech() {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.resume();
+  const warm = new SpeechSynthesisUtterance("");
+  warm.volume = 0;
+  window.speechSynthesis.speak(warm);
+}
+
+function say(text) {
+  if (!window.speechSynthesis || !text) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = "zh-CN";
+  const voice = window.speechSynthesis.getVoices().find((item) => /^zh/i.test(item.lang || ""));
+  if (voice) utter.voice = voice;
+  window.speechSynthesis.speak(utter);
+}
+
 async function begin(event) {
   event.preventDefault();
   if (held) return;
+  prepareSpeech();
   stopRequested = false;
   button.classList.add("held");
   chunks = [];
@@ -135,6 +169,7 @@ async function finish() {
   const body = await response.json();
   heardEl.textContent = "最近识别：" + (body.text || "（无）");
   setStatus(body.message || "没有结果");
+  say(body.speech || "");
 }
 
 button.addEventListener("pointerdown", (event) => {
@@ -149,6 +184,10 @@ button.addEventListener("pointercancel", () => finish());
 fetch("/commands").then((response) => response.json()).then((names) => {
   words.textContent = "指令：" + names.join("、");
 });
+setInterval(() => {
+  const camera = document.getElementById("camera");
+  if (camera) camera.src = "/preview.jpg?" + Date.now();
+}, 500);
 </script>
 </body>
 </html>
@@ -191,9 +230,91 @@ def local_addresses():
     return sorted(found)
 
 
+def _group_token(group):
+    return (ROOT / ".local/example_tokens" / f"{group}.token").read_text(encoding="ascii").strip()
+
+
+def _write_overlay(sentence, items):
+    rows = []
+    for item in items:
+        box = getattr(item, "xyxy", None)
+        if not box or len(box) != 4:
+            continue
+        rows.append({
+            "label": str(getattr(item, "label", "") or ""),
+            "score": float(getattr(item, "score", 0) or 0),
+            "xyxy": [float(value) for value in box],
+        })
+    OVERLAY.parent.mkdir(parents=True, exist_ok=True)
+    temporary = OVERLAY.with_suffix(".tmp.json")
+    temporary.write_text(
+        json.dumps({"sentence": sentence, "items": rows}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    os.replace(temporary, OVERLAY)
+
+
+class RealArm:
+    """One JSON line in, one JSON line out. The SDK process owns the serial port."""
+
+    def __init__(self):
+        self.proc = None
+        self.replies = queue.Queue()
+
+    def start(self):
+        if not FAFU_PYTHON.is_file():
+            raise RuntimeError(f"找不到真机解释器：{FAFU_PYTHON}")
+        self.proc = subprocess.Popen(
+            [str(FAFU_PYTHON), str(FAFU_SCRIPT)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        threading.Thread(target=self._read, daemon=True).start()
+        try:
+            ready = self.replies.get(timeout=40)
+        except queue.Empty as exc:
+            self.close()
+            raise RuntimeError("真机连接超时。") from exc
+        if not ready.get("ready"):
+            self.close()
+            raise RuntimeError(str(ready.get("error") or "真机没连上"))
+        return ready
+
+    def alive(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def command(self, payload, timeout):
+        if not self.alive():
+            raise RuntimeError("真机进程不在。")
+        self.proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        self.proc.stdin.flush()
+        return self.replies.get(timeout=timeout)
+
+    def close(self):
+        if not self.alive():
+            return
+        try:
+            self.proc.stdin.write('{"cmd":"shutdown"}\n')
+            self.proc.stdin.flush()
+            self.proc.wait(timeout=4)
+        except Exception:
+            self.proc.terminate()
+
+    def _read(self):
+        for line in self.proc.stdout:
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            self.replies.put(message)
+
+
 class RemoteMic:
-    def __init__(self, loop, system, recognizer):
-        self.loop, self.system, self.recognizer = loop, system, recognizer
+    def __init__(self, loop, system, vision, recognizer, arm):
+        self.loop, self.system, self.vision = loop, system, vision
+        self.recognizer, self.arm = recognizer, arm
         self.lock = asyncio.Lock()
 
     def serve(self):
@@ -213,11 +334,20 @@ class RemoteMic:
                 self.wfile.write(data)
 
             def do_GET(self):
-                if self.path.split("?", 1)[0] == "/commands":
-                    names = [*COMMANDS, "停止", "停止播报", "状态"]
+                path = self.path.split("?", 1)[0]
+                if path == "/commands":
+                    names = [*COMMANDS, *ASKS, "停止", "停止播报", "状态"]
                     self._send(200, json.dumps(names, ensure_ascii=False), "application/json")
                     return
-                if self.path.split("?", 1)[0] not in {"/", "/index.html"}:
+                if path == "/preview.jpg":
+                    try:
+                        payload = PREVIEW.read_bytes()
+                    except OSError:
+                        self._send(404, "no preview", "text/plain; charset=utf-8")
+                        return
+                    self._send(200, payload, "image/jpeg")
+                    return
+                if path not in {"/", "/index.html"}:
                     self._send(404, "not found", "text/plain; charset=utf-8")
                     return
                 self._send(200, PAGE, "text/html; charset=utf-8")
@@ -260,58 +390,217 @@ class RemoteMic:
         async with self.lock:
             captured = await self.system.snapshot(node="wrs")
             transcript = await asyncio.to_thread(self.recognizer.transcribe, audio)
-            message = await apply_command(self.system, transcript.text, captured)
+            message, speech = await apply_command(self, transcript.text, captured)
             print(f"识别：{transcript.text}；{message}", flush=True)
-            return {"ok": True, "text": transcript.text, "message": message}
+            return {"ok": True, "text": transcript.text, "message": message, "speech": speech}
 
 
-async def apply_command(system, text, captured):
+def _cloud_from_box(camera, box):
+    import numpy as np
+
+    depth = np.load(DEPTH, allow_pickle=False)
+    height, width = depth.shape[:2]
+    x1, y1, x2, y2 = (int(value) for value in box)
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(width, x2), min(height, y2)
+    fx, fy = float(camera["fx"]), float(camera["fy"])
+    cx, cy = float(camera["cx"]), float(camera["cy"])
+    points = []
+    for row in range(y1, y2, 2):
+        for col in range(x1, x2, 2):
+            z = float(depth[row, col])
+            if 0.05 < z < 1.5:
+                points.append(((col - cx) * z / fx, (row - cy) * z / fy, z))
+    if len(points) < 16:
+        return None
+    np.save(CLOUD, np.asarray(points, dtype="float32"))
+    return CLOUD
+
+
+def _grasp_sentence(prompt, item, source):
+    name = object_name(prompt)
+    translation = getattr(item, "translation", None)
+    if not translation or len(translation) != 3:
+        return f"找到了{name}，但没有可用的抓取点。机械臂没有移动。"
+    x, y, z = (float(value) for value in translation)
+    width = getattr(item, "width", None)
+    opening = f"，张开{float(width):.2f}米" if width is not None else ""
+    return (
+        f"{source}在相机坐标系给出{name}的抓取点，"
+        f"x{x:.2f}米，y{y:.2f}米，z{z:.2f}米{opening}。"
+        "还没有手眼标定，机械臂没有移动。"
+    )
+
+
+async def grasp_object(remote, prompt):
+    """Find the named region, segment its depth, then score one grasp."""
+    if not FRAME.is_file() or not DEPTH.is_file() or not CAMERA.is_file():
+        return "相机还没有对齐的深度图。", ""
+    segment = await remote.vision.action("segment", image=str(FRAME), text=prompt)
+    found = await segment.wait(timeout=180)
+    if found.state != "SUCCEEDED":
+        return f"没有分割出「{prompt}」。", ""
+    items = (await remote.vision.snapshot(node="sam3")).data.items
+    chosen = None
+    score = -1.0
+    for item in items:
+        box = getattr(item, "xyxy", None)
+        value = float(getattr(item, "score", 0) or 0)
+        if box and len(box) == 4 and (chosen is None or value > score):
+            chosen, score = item, value
+    if chosen is None:
+        return f"画面里没有「{object_name(prompt)}」。机械臂没有移动。", ""
+    box = [float(value) for value in chosen.xyxy]
+    _write_overlay(f"目标：{object_name(prompt)}", [chosen])
+    camera = json.loads(CAMERA.read_text(encoding="utf-8"))
+    scored = await remote.vision.action(
+        "graspability",
+        depth=str(DEPTH),
+        x1=box[0],
+        y1=box[1],
+        x2=box[2],
+        y2=box[3],
+        fx=float(camera["fx"]),
+        fy=float(camera["fy"]),
+        cx=float(camera["cx"]),
+        cy=float(camera["cy"]),
+        top=3,
+    )
+    result = await scored.wait(timeout=60)
+    grasps = []
+    source = "graspability"
+    if result.state == "SUCCEEDED":
+        grasps = list((await remote.vision.snapshot(node="graspability")).data.items)
+    if not grasps:
+        cloud = _cloud_from_box(camera, box)
+        if cloud is None:
+            return f"这块深度里没有可抓的表面。机械臂没有移动。", ""
+        backup = await remote.vision.action("infer_grasps", cloud=str(cloud), top=3)
+        backup_result = await backup.wait(timeout=180)
+        if backup_result.state != "SUCCEEDED":
+            return "这块深度里没有可用的抓取。机械臂没有移动。", ""
+        grasps = list((await remote.vision.snapshot(node="graspnet")).data.items)
+        source = "GraspNet"
+    if not grasps:
+        return "这块深度里没有可用的抓取。机械臂没有移动。", ""
+    sentence = _grasp_sentence(prompt, grasps[0], source)
+    return sentence, sentence
+
+
+async def describe_scene(remote):
+    """Detect the latest camera frame. The browser speaks the sentence."""
+    if not FRAME.is_file():
+        return "相机还没有画面。", ""
+    action = await remote.vision.action("detect", image=str(FRAME))
+    result = await action.wait(timeout=180)
+    if result.state != "SUCCEEDED":
+        return f"识别没有完成：{result.state}", ""
+    items = (await remote.vision.snapshot(node="yolo")).data.items
+    sentence = desktop_utterance(items)
+    _write_overlay(sentence, items)
+    try:
+        spoken = await (await remote.system.action("speak", text=sentence)).wait(timeout=60)
+        if spoken.state != "SUCCEEDED":
+            print(f"机器人端播报{spoken.state}", flush=True)
+    except Exception as exc:
+        print(f"机器人端播报未发出：{exc.__class__.__name__}", flush=True)
+    return sentence, sentence
+
+
+async def stop_real_arm(remote):
+    if remote.arm is None or not remote.arm.alive():
+        return "真机没连上，急停没有发出。"
+    try:
+        result = await asyncio.to_thread(remote.arm.command, {"cmd": "stop"}, 8)
+    except Exception as exc:
+        return f"真机急停没发出：{exc}"
+    return str(result.get("status") or "已急停。")
+
+
+async def move_real_arm(remote, text):
+    if remote.arm is None or not remote.arm.alive():
+        return "真机没连上，没有执行动作。", ""
+    payload, speech = fafu_payload(text)
+    timeout = 90
+    if payload.get("cmd") == "nudge":
+        meters = max(abs(payload["dx"]), abs(payload["dy"]), abs(payload["dz"]))
+        timeout = max(90, int(meters * 300))
+    try:
+        result = await asyncio.to_thread(remote.arm.command, payload, timeout)
+    except Exception as exc:
+        return f"真机没有执行：{exc}", ""
+    status = str(result.get("status") or speech)
+    if not result.get("ok"):
+        return status, ""
+    return status, speech
+
+
+async def apply_command(remote, text, captured):
     """Same admission rules as 06_push_to_talk.dispatch; returns the sentence shown on the page."""
+    system = remote.system
+    del captured
     text = normalize(text)
     if not text:
-        return "没有识别到文字，没有执行动作。"
+        return "没有识别到文字，没有执行动作。", ""
     intent, _ = text_intent(TextInput(text=text))
-    if intent in {"stop", "cancel_tts", "query"}:
+    prompt = grasp_prompt(text)
+    if prompt and intent not in {"stop", "cancel_tts", "query"}:
+        return await grasp_object(remote, prompt)
+    if asks_what_is_there(text) and intent not in {"stop", "cancel_tts", "query"}:
+        return await describe_scene(remote)
+    if intent == "stop":
+        return await stop_real_arm(remote), ""
+    if intent in {"cancel_tts", "query"}:
         receipt = await system.send_text(text)
         detail = f"控制结果：{receipt.disposition}，受理 {receipt.accepted}"
         if receipt.phase:
             detail += f"，阶段 {receipt.phase}"
-        return detail
-    if text not in COMMANDS:
-        return "未匹配完整指令，没有执行动作。支持：" + "、".join([*COMMANDS, "停止", "状态"])
-    current = await system.snapshot(node="wrs")
-    if (current.boot_id, current.control_epoch) != (captured.boot_id, captured.control_epoch):
-        return "收音期间控制权限已变化，请重新说指令。"
-    overview = await system.status()
-    if overview["task_id"] and overview["state"] not in TERMINAL:
-        return "任务仍在执行或停止确认中；请先说“停止”，确认结束后再给新指令。"
-    if current.admission == "UNKNOWN" or not current.stop_confirmed:
-        return "机器人状态未确认，拒绝新动作。"
-    if current.admission == "HELD":
-        receipt = await system.allow_actions(node="wrs")
-        if not receipt.accepted:
-            return f"未能允许新任务：{receipt.reason}"
-    skill, parameters, speech = COMMANDS[text]
-    task = await system.start(step(skill, **parameters), step("speak", text=speech))
-    return f"新任务 {task.id}：{speech} 运动与播报并行，可继续说“停止”。"
+        return detail, ""
+    if parse_centimeter_move(text) is not None or (
+        text in COMMANDS and COMMANDS[text][0] != "move_relative"
+    ):
+        return await move_real_arm(remote, text)
+    if text in COMMANDS:
+        return "请说移动多少厘米，例如：向上5厘米。", ""
+    return "未匹配完整指令，没有执行动作。支持：" + "、".join([*COMMANDS, "停止", "状态"]), ""
 
 
 async def main():
+    print("连接 HTDW-4530-02-DNE ……", flush=True)
+    arm = RealArm()
+    try:
+        ready = await asyncio.to_thread(arm.start)
+        print(f"真机已连接：{ready.get('port')} {ready.get('state')}", flush=True)
+    except Exception as exc:
+        print(f"真机没连上：{exc}", flush=True)
+        arm = None
     print("加载 Qwen3-ASR 0.6B 并预热，语言固定为中文……", flush=True)
     recognizer = await asyncio.to_thread(
-        QwenASR, vocabulary=[*COMMANDS, "停止", "停止播报", "状态"],
+        QwenASR, vocabulary=[
+            *COMMANDS, *ASKS, "停止", "停止播报", "状态", "厘米", "移动",
+            "抓住", "抓起", "拿起", "杯子", "瓶子", "苹果",
+            "一", "二", "两", "三", "四", "五", "六", "七", "八", "九", "十",
+        ],
     )
     await asyncio.to_thread(recognizer.warmup)
-    async with System.connect(
-        "tcp/127.0.0.1:7449", env_id="wrs-demo", bindings=CONFIG,
-    ) as system:
-        remote = RemoteMic(asyncio.get_running_loop(), system, recognizer)
-        _http, _https, addresses = remote.serve()
-        print(f"本机或 SSH 转发：http://127.0.0.1:{HTTP_PORT}", flush=True)
-        for address in addresses:
-            print(f"局域网：https://{address}:{HTTPS_PORT}", flush=True)
-        print("指令：", "、".join([*COMMANDS, "停止", "停止播报", "状态"]), flush=True)
-        await asyncio.Event().wait()
+    try:
+        async with System.connect(
+            "tcp/127.0.0.1:7448", env_id="node-demo", _token=_group_token("nodes"),
+        ) as vision:
+            async with System.connect(
+                "tcp/127.0.0.1:7449", env_id="wrs-demo", bindings=CONFIG,
+                _token=_group_token("wrs"),
+            ) as system:
+                remote = RemoteMic(asyncio.get_running_loop(), system, vision, recognizer, arm)
+                _http, _https, addresses = remote.serve()
+                print(f"本机或 SSH 转发：http://127.0.0.1:{HTTP_PORT}", flush=True)
+                for address in addresses:
+                    print(f"局域网：https://{address}:{HTTPS_PORT}", flush=True)
+                print("指令：", "、".join([*COMMANDS, *ASKS, "停止", "停止播报", "状态"]), flush=True)
+                await asyncio.Event().wait()
+    finally:
+        if arm is not None:
+            await asyncio.to_thread(arm.close)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""启动 YOLO、SAM3、GraspNet 三个常驻节点。先运行 00_start_router.py。
+"""启动 YOLO、SAM3、GraspNet、graspability 四个常驻节点。先运行 00_start_router.py。
 
 模型在第一次技能调用时加载，进程退出前不重复加载。
 YOLO / SAM3 使用带 ultralytics 的解释器，默认探测 ~/miniconda3/envs/yolov8。
@@ -16,12 +16,13 @@ from pathlib import Path
 
 from examples._session import use_local_token
 from wrs_agent.nodes.serve import serve_node
-from wrs_agent.nodes.vision import GraspNetNode, Sam3Node, YoloNode
+from wrs_agent.nodes.vision import GraspabilityNode, GraspNetNode, Sam3Node, YoloNode
 
 NODES = (
     (YoloNode, "yolo"),
     (Sam3Node, "sam3"),
     (GraspNetNode, "graspnet"),
+    (GraspabilityNode, "graspability"),
 )
 
 
@@ -55,7 +56,11 @@ async def main():
     endpoint = os.environ.get("WRS_ENDPOINT", "tcp/127.0.0.1:7448")
     env_id = os.environ.get("WRS_ENV_ID", "node-demo")
     print(f"视觉节点加入 {endpoint}，env {env_id}", flush=True)
-    print("技能：detect（yolo）、segment（sam3）、infer_grasps（graspnet）", flush=True)
+    print(
+        "技能：detect（yolo）、segment（sam3）、infer_grasps（graspnet）、"
+        "graspability（深度区域分割后的平行夹爪）",
+        flush=True,
+    )
     print(f"解释器：{os.environ.get('WRS_VISION_PYTHON', '当前 Python')}", flush=True)
     weights = os.environ.get("WRS_YOLO_WEIGHTS", "yolov8n.pt")
     print(f"YOLO 权重：{weights}", flush=True)

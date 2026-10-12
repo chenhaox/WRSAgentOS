@@ -3,7 +3,7 @@
 import asyncio
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from wrs_agent.executor import SkillFailure
 from wrs_agent.schemas import Boundary
@@ -26,6 +26,27 @@ class SegmentArgs(DetectArgs):
 class GraspArgs(Boundary):
     cloud: str = Field(min_length=1, max_length=240)
     top: int = Field(default=5, ge=1, le=8)
+
+
+class GraspabilityArgs(Boundary):
+    """One color-aligned depth image and the box of the named object."""
+
+    depth: str = Field(min_length=1, max_length=240)
+    x1: float = Field(ge=0, le=8192)
+    y1: float = Field(ge=0, le=8192)
+    x2: float = Field(gt=0, le=8192)
+    y2: float = Field(gt=0, le=8192)
+    fx: float = Field(gt=0, le=20000)
+    fy: float = Field(gt=0, le=20000)
+    cx: float = Field(ge=0, le=8192)
+    cy: float = Field(ge=0, le=8192)
+    top: int = Field(default=3, ge=1, le=8)
+
+    @model_validator(mode="after")
+    def ordered_box(self):
+        if self.x2 <= self.x1 or self.y2 <= self.y1:
+            raise ValueError("invalid_region")
+        return self
 
 
 def _file(path, suffixes, limit):
@@ -74,6 +95,23 @@ async def infer_grasps(state, options: GraspArgs, stop, progress):
     return await _run(state, "infer_grasps", cloud, payload, stop, progress)
 
 
+async def graspability(state, options: GraspabilityArgs, stop, progress):
+    depth = _file(options.depth, {".npy"}, _CLOUD_LIMIT)
+    payload = {
+        "depth": depth,
+        "x1": options.x1,
+        "y1": options.y1,
+        "x2": options.x2,
+        "y2": options.y2,
+        "fx": options.fx,
+        "fy": options.fy,
+        "cx": options.cx,
+        "cy": options.cy,
+        "top": options.top,
+    }
+    return await _run(state, "graspability", depth, payload, stop, progress)
+
+
 def _skill(name, arguments, handler, description):
     return Skill(
         name=name,
@@ -105,4 +143,12 @@ INFER_GRASPS = _skill(
     infer_grasps,
     "Propose grasp poses from a camera-frame .npy cloud with GraspNet. "
     "Translation and rotation stay in that cloud frame.",
+)
+GRASPABILITY = _skill(
+    "graspability",
+    GraspabilityArgs,
+    graspability,
+    "Segment the near surface inside one color-aligned depth box, then score "
+    "parallel-jaw grasps with graspability. Translation, rotation, and jaw width "
+    "stay in that depth camera frame.",
 )

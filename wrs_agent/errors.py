@@ -1,8 +1,16 @@
 """One error payload shared by local exceptions, RPC failures and task results."""
 
-from pydantic import ValidationError
+import sys
+from pathlib import Path
 
-from wrs_agent.schemas import ErrorInfo
+# The editor play button runs a file directly and does not use scripts/run.py.
+_deps = Path(__file__).resolve().parents[1] / ".local" / "deps"
+if _deps.is_dir() and str(_deps) not in sys.path:
+    sys.path.insert(0, str(_deps))
+
+from pydantic import ValidationError  # noqa: E402
+
+from wrs_agent.schemas import ErrorInfo  # noqa: E402
 
 _MESSAGES = {
     "llm_model_missing": (
