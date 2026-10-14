@@ -45,8 +45,12 @@ def request_body(request: ModelRequest, config) -> dict:
                 },
             }
         ],
-        # Some compatible servers (GLM among them) accept only auto.
-        "tool_choice": config.tool_choice,
+        # There is exactly one offered tool. Qwen does not reliably enforce "required";
+        # select that function explicitly. Auto stays available for other servers.
+        "tool_choice": (
+            {"type": "function", "function": {"name": TOOL_NAME}}
+            if config.tool_choice == "required" else "auto"
+        ),
     }
     if config.reasoning_effort is not None:
         # Omitted when unset: servers that predate the field reject it outright.
@@ -85,7 +89,7 @@ def parse_reply(data: bytes) -> ModelReply:
                 raise ValueError("one_tool_required")
             call = calls[0]
             if call["type"] != "function" or call["function"]["name"] != TOOL_NAME:
-                raise ValueError("unexpected_tool")
+                raise LLMError("llm_unexpected_tool")
             arguments = call["function"]["arguments"]
             if not isinstance(arguments, str):
                 raise ValueError("json_arguments_required")
@@ -97,5 +101,7 @@ def parse_reply(data: bytes) -> ModelReply:
                 raise ValueError("text_required")
             text = answer_text(message["content"])
         return ModelReply(text, "complete", usage, metadata)
+    except LLMError:
+        raise
     except (KeyError, TypeError, ValueError, RecursionError):
         raise LLMError("llm_invalid_reply") from None

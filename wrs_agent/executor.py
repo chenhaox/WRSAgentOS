@@ -8,6 +8,8 @@ import time
 from collections import OrderedDict
 from collections.abc import Mapping
 
+from pydantic import ValidationError
+
 from wrs_agent.errors import AgentError, error_info
 from wrs_agent.schemas import (
     MAX_BYTES,
@@ -117,7 +119,21 @@ class ActionExecutor:
             raise AgentError("node_instance_changed")
         for step in request.steps:
             try:
-                validate_skill(step.skill, step.version, step.args, registry=self.skills)
+                entry = self.skills.get(step.skill)
+                if step.inputs:
+                    if entry is None or step.version != entry.version:
+                        raise AgentError("skill_version_mismatch")
+                    if not step.inputs.keys() <= set(entry.result_parameters):
+                        raise AgentError("result_input_not_allowed")
+                    try:
+                        entry.arguments.model_validate(step.args)
+                    except ValidationError as exc:
+                        # Only the explicitly bound missing fields may remain unresolved.
+                        if any(e["type"] != "missing" or tuple(e["loc"]) not in
+                               {(name,) for name in step.inputs} for e in exc.errors()):
+                            raise AgentError("invalid_arguments") from None
+                else:
+                    validate_skill(step.skill, step.version, step.args, registry=self.skills)
             except AgentError as exc:
                 raise AgentError(exc.error.model_copy(
                     update={"node_id": self.node_id, "stage": "preflight"},
@@ -168,8 +184,18 @@ class ActionExecutor:
         record = self.records.get(action_id)
         return record[1] if record else None
 
+    def active_request(self):
+        """Task identity accepted by this executor, for task-scoped backend artifacts."""
+        if self.active is None:
+            raise AgentError("no_active_action")
+        request, status = self.records[self.active]
+        if status.state != ActionState.RUNNING:
+            raise AgentError("action_not_running")
+        return ActionRequest.model_validate(request)
+
     def _status(
-        self, action_id, state: ActionState, reason="", verification="PENDING", progress=None
+        self, action_id, state: ActionState, reason="", verification="PENDING", progress=None,
+        output=None,
     ):
         request, old = self.records[action_id]
         status = ActionStatus(
@@ -188,6 +214,7 @@ class ActionExecutor:
             else None,
             reason=reason,
             verification=verification,
+            output=output or {},
         )
         self.records[action_id] = (request, status)
         self.on_event("events/action", status.model_dump())
@@ -301,6 +328,7 @@ class ActionExecutor:
                 request.skill, request.version, request.args, registry=self.skills
             )
             verified = False
+            output = {}
 
             def progress(value):
                 if not self.stop_signal.is_set():
@@ -318,7 +346,13 @@ class ActionExecutor:
                     self.stop_signal,
                     progress,
                 )
-                verified = await result if inspect.isawaitable(result) else result
+                result = await result if inspect.isawaitable(result) else result
+                entry = self.skills[request.skill]
+                if entry.output is not None and result is not False:
+                    output = entry.output.model_validate(result).model_dump()
+                    verified = True
+                else:
+                    verified = result is True
             if (
                 self.stop_signal.is_set()
                 or request.control_epoch != self.epoch
@@ -336,6 +370,7 @@ class ActionExecutor:
                 "" if verified else "postcondition_failed",
                 "PASS" if verified else "FAIL",
                 progress=1.0,
+                output=output if verified else {},
             )
         except asyncio.CancelledError:
             self.admission = "UNKNOWN"

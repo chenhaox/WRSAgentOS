@@ -1,0 +1,10 @@
+{
+  "model": "ViT-B/32",
+  "filename": "ViT-B-32.pt",
+  "size": 353976522,
+  "sha256": "40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af",
+  "url": "https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt",
+  "source_revision": "d05afc436d78f1c48dc0dbf8e5980a9d471f35f6",
+  "license": "MIT",
+  "license_url": "https://github.com/openai/CLIP/blob/d05afc436d78f1c48dc0dbf8e5980a9d471f35f6/LICENSE"
+}

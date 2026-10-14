@@ -15,7 +15,9 @@ class Skill:
     description: str
     resources: tuple[str, ...]
     verification: str
-    handler: Callable[..., bool | Awaitable[bool]] | None = None
+    handler: Callable[..., bool | Boundary | Awaitable[bool | Boundary]] | None = None
+    output: type[Boundary] | None = None
+    result_parameters: tuple[str, ...] = ()
     version: int = 1
     instructions: str = ""
     preconditions: tuple[str, ...] = ()
@@ -28,18 +30,26 @@ class Skill:
             raise ValueError("invalid_skill_arguments")
         if self.handler is not None and not callable(self.handler):
             raise ValueError("invalid_skill_handler")
+        if self.output is not None and (
+            not isinstance(self.output, type) or not issubclass(self.output, Boundary)
+        ):
+            raise ValueError("invalid_skill_output")
+        if not set(self.result_parameters).issubset(self.arguments.model_fields):
+            raise ValueError("invalid_result_parameters")
         if any(
             isinstance(getattr(self, name), (str, bytes))
-            for name in ("resources", "preconditions", "recovery")
+            for name in ("resources", "preconditions", "recovery", "result_parameters")
         ):
             raise ValueError("invalid_skill_metadata")
         spec = SkillSpec(
             name=self.name, version=self.version, description=self.description,
             instructions=self.instructions, parameters=self.arguments.model_json_schema(),
+            output=self.output.model_json_schema() if self.output else None,
+            result_parameters=list(self.result_parameters),
             resources=list(self.resources), preconditions=list(self.preconditions),
             verification=self.verification, timeout=self.timeout, recovery=list(self.recovery),
         )
-        for name in ("resources", "preconditions", "recovery"):
+        for name in ("resources", "preconditions", "recovery", "result_parameters"):
             object.__setattr__(self, name, tuple(getattr(spec, name)))
         object.__setattr__(self, "_spec", spec)
 

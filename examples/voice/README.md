@@ -25,7 +25,7 @@ Voice 已是独立 Zenoh 节点，处理已识别的文字、停止意图和控�
 .local/venvs/qwen-asr/Scripts/python.exe -m examples.voice.06_push_to_talk
 ```
 
-本机 `D:\code\venv312\.venv` 已安装 ASR，IDE 直接运行 06 或 08 时可继续使用它；原 `.local/venvs/qwen-asr` 也可用。终端从仓库根目录用该解释器加 `-m examples.voice.06_push_to_talk`（或 08 模块）启动。默认模型路径固定为项目根目录下 `.local/models`，不需要因工作目录不同重新下载。
+若本机其他 Python 环境已安装 ASR，IDE 直接运行 06 或 08 时可继续使用它；原 `.local/venvs/qwen-asr` 也可用。终端从仓库根目录用该解释器加 `-m examples.voice.06_push_to_talk`（或 08 模块）启动。默认模型路径固定为项目根目录下 `.local/models`，不需要因工作目录不同重新下载。
 
 地址 `7449 / wrs-demo`。完整词表在 [commands.py](commands.py)；未知词不交给 Mock Planner。“停止”直接控制任务；`s` 也可发送停止，`q` 退出观察。节点重启/中断时，旧录音识别出的运动指令会被拒绝。
 
@@ -34,6 +34,13 @@ Voice 已是独立 Zenoh 节点，处理已识别的文字、停止意图和控�
 ## 自然语言目标交给在线模型：按住说话或循环收音
 
 [07_start_llm_voice.py](07_start_llm_voice.py) 使用真正的在线模型 Planner，不做离线回退。启动它前配置 `LLM_PROTOCOL`、`LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY`（GLM、OpenAI、Claude 等写法见 [.env.example](../../.env.example)），安装 `llm` 依赖；凭据不写代码，`.env` 不自动加载。执行语音目标可能产生模型费用。它同时启动 `asr` 节点，首次加载 TTS 与 ASR 模型需要数十秒。
+
+在 PyCharm 的 `07_start_llm_voice` 运行配置中，将 `Paths to .env files` 指向仓库根目录
+的 `.env`。只填写文件或在 IDE 终端设置变量，
+不会让这份运行配置自动读取它；`01_plan` 等其他脚本的设置也不会自动共享给 07。
+若文件里已填写模型却仍报 `LLM_MODEL` 缺失，先检查这一项。启动时的“已配置本机示例
+共享口令”只表示 `WRS_AGENT_TOKEN` 就绪，模型仍需要单独的 `LLM_*` 配置。
+从终端运行下面命令时，也要先在该终端设置这些环境变量。
 
 ```powershell
 # 终端一：不要同时保留另一套 Qwen 语音服务，避免额外占用显存
@@ -45,6 +52,37 @@ Voice 已是独立 Zenoh 节点，处理已识别的文字、停止意图和控�
 ```
 
 这组使用独立地址 `7451 / voice-goal` 和口令分组，避免误连到确定性规划例子。
+
+### 在语音页面看相机、通过语音调用 YOLO
+
+当前 [01_start_camera.py](../camera/01_start_camera.py)、
+[02_read_frame.py](../camera/02_read_frame.py) 和
+[03_start_yolo.py](../camera/03_start_yolo.py) 已统一配置为语音环境，可直接运行：
+
+```python
+ENDPOINT = "tcp/127.0.0.1:7451"
+ENV_ID = "voice-goal"
+SESSION = "voice"
+```
+
+保持现有相机 BACKEND、设备和 YOLO 权重配置。然后分别运行：
+
+1. `voice/07_start_llm_voice.py`，等待就绪；已包含 Router、Agent、TTS、Voice、ASR。
+2. `camera/01_start_camera.py`，提供 RGB、深度和点云。
+3. `camera/03_start_yolo.py`，需要检测/描述物体时启动，持续读取 01 的新帧。
+4. `voice/09_viewer.py`，打开 `http://127.0.0.1:8001`。
+
+这套流程不需要 `camera/00_start_router.py`、04 或 05；另开的 7449 Router 不会把
+相机接到 7451。02 是可选 OpenCV 预览，已使用上面三项配置。
+只看 RGB/深度/点云不需要 YOLO；想说“识别画面中的物体并播报”则需要 03，Agent
+在同一环境动态发现 `describe_objects` 技能，执行取决于模型提案和 Runtime 校验。
+无需把 `LLM_API_KEY` 配给相机或 YOLO。若手动设置了 `WRS_AGENT_TOKEN`，它优先于
+自动口令，各进程必须同值；只改 SESSION 不会覆盖已设置的环境变量。
+
+viewer 可以先于相机或 YOLO 启动，节点加入后会刷新；重启 09 可加载页面代码修复。
+相机面板离线时会显示查询地址、环境和节点，先对照这三项。启动时的零字节 TCP
+探测不代表相机故障；带相机面板的 viewer 现已过滤这种空握手日志，非空无效请求
+和真正的 WebSocket 错误仍会记录。
 
 [09_viewer.py](09_viewer.py) 显示关节状态，并用 `asr` 节点收音：按住面板上的“按住说话”按钮开始录音，松开结束。麦克风和 Torch 都在节点进程里，viewer 只发按下/松开/取结果三个短请求，渲染不会被识别阻塞；浏览器失焦或断线会自动松手。文字回到 viewer 后按与 08 相同的准入检查提交目标——状态未确认或收音期间控制权限变化都会拒绝。上一条还在规划或执行时，viewer 先经 Voice 控制通道发出停止（取消任务，并作废还在等模型的规划），确认停下后再提交新目标；5 秒内没停下或结果变成 UNKNOWN，新目标就放弃，不在未确认的状态上叠加运动。不同的是按住说话不要求唤醒前缀：按住按钮本身已经声明这一句是对机器人说的。“停止”是例外：由节点直接送进 Voice 控制通道，不等 viewer 转发，面板上的“立即停止”按钮则完全不经过识别。
 

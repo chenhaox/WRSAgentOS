@@ -37,9 +37,14 @@ PAIRED = {
     "nodes/03_call_skill.py",
     "nodes/04_task.py",
     "nodes/05_cancel.py",
+    "camera/00_start_router.py", "camera/01_start_camera.py",
+    "camera/05_start_agent.py", "camera/06_speak_objects.py",
 }
 # Explicit audio/model or interactive examples; never run by the default verifier.
 LIVE = {
+    "grasping/00_start_router.py", "grasping/01_start_camera.py",
+    "grasping/02_start_locator.py", "grasping/03_start_fastsam.py",
+    "grasping/04_start_graspnet.py", "grasping/05_start_agent.py", "grasping/06_propose_grasps.py",
     "models/01_plan.py", "models/02_execute.py",
     "voice/05_start_wrs_voice.py", "voice/06_push_to_talk.py",
     "voice/07_start_llm_voice.py", "voice/08_listen_goals.py", "voice/09_viewer.py",
@@ -52,6 +57,7 @@ LIVE = {
     "nodes/10_live_announce.py",
     "nodes/11_voice_grasp.py",
     "tts/01_start_node.py", "tts/02_speak.py", "tts/03_cancel.py",
+    "camera/02_read_frame.py", "camera/03_start_yolo.py", "camera/04_start_tts.py",
 }
 SUPPORT = {"nodes/greet_skill.py", "voice/commands.py", "_session.py"}
 

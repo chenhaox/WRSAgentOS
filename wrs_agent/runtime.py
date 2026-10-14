@@ -42,6 +42,7 @@ class TaskExecution:
     robot_controls: dict = field(default_factory=dict, compare=False)
     authorities: dict = field(default_factory=dict, compare=False)
     actions: dict = field(default_factory=dict, compare=False)
+    outputs: dict = field(default_factory=dict, compare=False)
     release_epochs: dict = field(default_factory=dict, compare=False)
     submitting: set = field(default_factory=set, compare=False)
     submissions_idle: asyncio.Event = field(default_factory=asyncio.Event, compare=False)
@@ -184,6 +185,7 @@ class Runtime:
 
     def snapshot(self):
         actions = dict(self.execution.active_actions)
+        planning = self.goals.get(self.planning.request_id, {})
         return {
             "nodes": self.registry.snapshot() if self.registry else {},
             "task_id": self.task_id,
@@ -196,6 +198,7 @@ class Runtime:
             "error": self.execution.error.model_dump() if self.execution.error else None,
             "planning": self.planning.state,
             "planning_request_id": self.planning.request_id,
+            "planning_error": deepcopy(planning.get("error")),
             "planner_calls": self.planner_calls,
             "last_planning": dict(self.planning.timing),
             "queued": len(self.queued),
@@ -545,7 +548,22 @@ class Runtime:
                     if not self._active(task):
                         outcomes[step.step_id] = "STALE"
                         return
-                    outcomes[step.step_id] = await self._run_step(step, node_name, task)
+                    resolved = step
+                    if step.inputs:
+                        args = dict(step.args)
+                        for parameter, ref in step.inputs.items():
+                            source = task.outputs.get(ref.step_id, {})
+                            if ref.field not in source:
+                                raise AgentError("step_output_missing")
+                            args[parameter] = source[ref.field]
+                        resolved = step.model_copy(update={"args": args, "inputs": {}})
+                        await task.clients[node_name].validate(
+                            [resolved], boot_id=task.boots[node_name],
+                        )
+                        if not self._active(task):
+                            outcomes[step.step_id] = "STALE"
+                            return
+                    outcomes[step.step_id] = await self._run_step(resolved, node_name, task)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -759,6 +777,8 @@ class Runtime:
                         stage="observe",
                     )
                 )
+            if status.state == ActionState.SUCCEEDED:
+                task.outputs[step.step_id] = dict(status.output)
             return status.state, status, world
         except Exception:
             if not self._active(task):

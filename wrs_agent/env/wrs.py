@@ -1,6 +1,7 @@
 """Actual WRS UR7E + DH50 IK/FK, owned by one worker. No hardware connection."""
 
 import asyncio
+import logging
 import site
 import sys
 import time
@@ -341,9 +342,57 @@ def probe_virtual():
     }
 
 
-async def serve_viewer_hub(port):
+def _viewer_log_filter(record):
+    """Ignore only an empty TCP readiness probe, keeping actual handshake failures."""
+    if record.getMessage() != "opening handshake failed" or not record.exc_info:
+        return True
+    from websockets.exceptions import InvalidMessage
+
+    error = record.exc_info[1]
+    if not isinstance(error, InvalidMessage):
+        return True
+    request_error = error.__cause__
+    stream_error = getattr(request_error, "__cause__", None)
+    # Match the verified websockets parser chain; a partial request or a truncated
+    # header must still be logged. Unknown versions/errors also remain visible.
+    return not (
+        isinstance(request_error, EOFError)
+        and str(request_error) == "connection closed while reading HTTP request line"
+        and isinstance(stream_error, EOFError)
+        and str(stream_error) == "stream ends after 0 bytes, before end of line"
+    )
+
+
+async def serve_viewer_hub(port, *, http_handler=None):
     # Keep all WRS imports in this adapter; no detached server survives the viewer.
     load_wrs()
     from wrs.viewer.server import serve
 
-    await serve(host="127.0.0.1", port=port, idle_timeout=0, auto_open=False)
+    if http_handler is None:
+        await serve(host="127.0.0.1", port=port, idle_timeout=0, auto_open=False)
+        return
+    # The fixed WRS Hub has no HTTP extension hook. Compose its existing scene relay
+    # with a local HTTP handler; leave the submodule, scene protocol and UI intact.
+    import websockets
+    from wrs.viewer.server import Hub, _static_response
+
+    logger = logging.getLogger("wrs_agent.viewer")
+    logger.addFilter(_viewer_log_filter)  # Scoped to this server, not websockets globally.
+    hub = Hub(idle_timeout=0, auto_open=False)
+
+    async def router(websocket):
+        if websocket.request.path.rstrip("/") == "/publish":
+            await hub.on_publish(websocket)
+        else:
+            await hub.on_view(websocket)
+
+    def process_request(connection, request):
+        if request.headers.get("Upgrade", "").lower() == "websocket":
+            return None
+        return http_handler(request.path, _static_response(request.path))
+
+    async with websockets.serve(
+        router, "127.0.0.1", port, max_size=None, process_request=process_request,
+        logger=logger,
+    ):
+        await hub.stop.wait()

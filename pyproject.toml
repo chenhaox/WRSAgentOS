@@ -12,6 +12,16 @@ dependencies = ["eclipse-zenoh==1.9.0", "pydantic>=2.12,<3"]
 [project.optional-dependencies]
 # One HTTP client for every model protocol; no vendor SDK is needed.
 llm = ["httpx>=0.28,<0.29"]
+camera = ["numpy>=1.26,<3", "pillow>=12,<13", "opencv-python>=4.10,<6"]
+realsense = ["pyrealsense2==2.56.5.9235"]
+yolo = ["ultralytics>=8.3,<9"]
+fastsam = ["ultralytics>=8.3,<9",
+           "clip @ git+https://github.com/openai/CLIP.git@d05afc436d78f1c48dc0dbf8e5980a9d471f35f6"]
+sam3 = ["transformers==5.15.1", "torch==2.9.0", "torchvision==0.24.0",
+        "numpy>=1.26,<3", "pillow>=12,<13"]
+graspnet = ["torch==2.9.0", "numpy>=1.26,<3", "pillow>=12,<13", "scipy>=1.14,<2",
+            "ninja>=1.11,<2",
+            "setuptools>=68", "wheel>=0.45,<1"]
 # qwen-tts-hf 0.1.1.post1 (2026-08-25) predates Transformers 5.16; on 5.17 its rope
 # compatibility shim raises AttributeError on the Mimi codec config during weight init.
 qwen-tts = [
@@ -21,14 +31,20 @@ qwen-tts = [
 qwen-asr = ["qwen-asr==0.0.6", "torch==2.9.0", "torchaudio==2.9.0", "sounddevice>=0.5,<0.6"]
 
 [dependency-groups]
-dev = ["httpx>=0.28,<0.29", "pytest>=9,<10", "pytest-asyncio>=1,<2", "ruff>=0.15,<1"]
+dev = ["httpx>=0.28,<0.29", "pytest>=9,<10", "pytest-asyncio>=1,<2", "ruff>=0.15,<1",
+       "numpy>=1.26,<3", "pillow>=12,<13", "opencv-python>=4.10,<6"]
 
 [tool.setuptools.packages.find]
 include = ["wrs_agent*"]
 
 [tool.setuptools.package-data]
+"wrs_agent.drivers.cameras" = ["LICENSE.legacy-wrs"]
+"wrs_agent.nodes.camera" = ["panel.js"]
 "wrs_agent.nodes.asr" = ["assets.json"]
 "wrs_agent.nodes.tts" = ["assets.json"]
+"wrs_agent.nodes.segmentation" = ["assets.json", "fastsam_assets.json", "clip_assets.json"]
+"wrs_agent.nodes.vision" = ["assets.json"]
+"wrs_agent.nodes.grasp" = ["assets.json"]
 "wrs_agent.skills" = ["README.md", "*/SKILL.md"]
 
 [tool.pytest.ini_options]
@@ -53,7 +69,10 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 # The upstream speech packages pin incompatible Transformers versions.
 # Install these extras into separate environments; nodes already communicate over Zenoh.
 [tool.uv]
-conflicts = [[{ extra = "qwen-tts" }, { extra = "qwen-asr" }]]
+conflicts = [
+    [{ extra = "qwen-tts" }, { extra = "qwen-asr" }],
+    [{ extra = "sam3" }, { extra = "qwen-asr" }],
+]
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
@@ -63,3 +82,4 @@ explicit = true
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
 torchaudio = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }]

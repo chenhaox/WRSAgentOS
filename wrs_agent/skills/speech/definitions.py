@@ -20,5 +20,6 @@ SKILLS = {
         resources=("speaker",),
         verification="virtual_utterance_complete",
         arguments=SpeakArgs,
+        result_parameters=("text",),
     )
 }

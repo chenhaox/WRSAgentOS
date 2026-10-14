@@ -1,0 +1,7 @@
+{
+  "calibration_id": "virtual-fixture-only",
+  "camera_frame": "virtual-depth-optical",
+  "source": "virtual_fixture",
+  "world_from_camera": [1.0, 0.0, 0.0, 0.4, 0.0, -1.0, 0.0, 0.1, 0.0, 0.0, -1.0, 0.4, 0.0, 0.0, 0.0, 1.0],
+  "max_observation_age_s": 10.0
+}

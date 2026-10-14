@@ -12,12 +12,32 @@ from wrs_agent.planner.providers import ModelRequest
 from wrs_agent.schemas import MAX_BYTES, encode
 
 TOOL_NAME = "propose_plan"
-TOOL_DESCRIPTION = "Propose an answer, clarification or bounded task plan."
+TOOL_DESCRIPTION = (
+    "Propose an answer, clarification or bounded task plan. "
+    "Put skill names in plan.steps[].skill; skills are not callable tools."
+)
 SYSTEM_PROMPT = (
     "You propose plans for WRS-Agent. You cannot execute actions. "
     "Use only the supplied skills and observed objects; never invent coordinates. "
-    "Submit at most one propose_plan call, or answer a question as plain text. "
+    "Your ONLY callable tool is propose_plan. The supplied skills are NOT tools you can call. "
+    "To use any skill, submit ONE propose_plan call with kind=execute and all steps inside "
+    "plan.steps, naming each skill in the step's skill field. Never call a skill directly. "
+    "Tool arguments must be one complete valid JSON object with double-quoted keys and strings, "
+    "without Markdown, code fences, comments or trailing text. "
+    "For questions needing no observation or action, propose an answer or use plain text. "
     "Dependencies must be acyclic, and steps sharing a resource must be ordered. "
+    "A step can bind an argument from a preceding step with inputs: "
+    "{argument: {step_id: preceding_step_id, field: output_field}}. "
+    "Declare that dependency in depends_on and omit the bound argument from args. "
+    "Only parameters listed in the skill's result_parameters accept such bindings. "
+    "Questions about currently visible objects require a fresh observation; never invent "
+    "what the camera sees from a snapshot count. When describe_objects and speak are supplied, "
+    "answer such questions by proposing this two-step plan, including for '桌子上有哪些物体？': "
+    '{"kind":"execute","text":"","plan":{"steps":['
+    '{"step_id":"see","skill":"describe_objects","args":{}},'
+    '{"step_id":"say","skill":"speak","args":{},"depends_on":["see"],'
+    '"inputs":{"text":{"step_id":"see","field":"text"}}}]}}. '
+    "This entire object is the arguments of ONE propose_plan call. "
     # Skills list their resources, and weaker models copy them into steps as new fields.
     "Steps contain only the fields in the propose_plan schema; skills already declare "
     "their resources, so never add resources, notes or other fields to a step. "

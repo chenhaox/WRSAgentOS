@@ -63,6 +63,8 @@ class SkillSpec(Boundary):
     description: str
     instructions: str = Field(default="", max_length=8192)
     parameters: dict
+    output: dict | None = None
+    result_parameters: list[Name] = Field(default_factory=list, max_length=8)
     resources: list[str]
     preconditions: list[str]
     verification: str
@@ -137,6 +139,15 @@ class ActionStatus(Boundary):
     reason: Annotated[str, Field(max_length=240)] = ""
     verification: Literal["PENDING", "PASS", "FAIL", "INCONCLUSIVE"] = "PENDING"
     error: ErrorInfo | None = None
+    output: Annotated[dict[Name, Scalar], Field(max_length=8)] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def bounded_output(self):
+        if len(json.dumps(self.output, allow_nan=False, ensure_ascii=False).encode()) > 4096:
+            raise ValueError("action_output_too_large")
+        if self.output and self.state != ActionState.SUCCEEDED:
+            raise ValueError("only_successful_actions_have_output")
+        return self
 
 
 class ActionReceipt(Boundary):
@@ -280,7 +291,7 @@ class VisionItem(Boundary):
 
 
 class VisionData(Boundary):
-    """Latest vision result summary. Images, masks, and clouds stay in files."""
+    """Latest vision snapshot. Images, masks, and clouds stay in files."""
 
     kind: Literal["vision"] = "vision"
     completed: Counter = 0
@@ -289,6 +300,10 @@ class VisionData(Boundary):
     summary: str = Field(default="", max_length=240)
     result_path: str = Field(default="", max_length=240)
     items: list[VisionItem] = Field(default_factory=list, max_length=8)
+    result_id: Name | None = None
+    observation_id: Name | None = None
+    count: int = Field(default=0, ge=0, le=32)
+    health: str = Field(default="waiting", max_length=80)
 
 
 class NodeSnapshot(Boundary):
@@ -329,7 +344,7 @@ class FeatureSnapshot(Boundary):
 
 class NodeInfo(Boundary):
     node_id: Name
-    node_type: Literal["agent", "wrs", "tts", "voice", "asr", "vision", "custom"]
+    node_type: Literal["agent", "wrs", "tts", "voice", "asr", "camera", "vision", "custom"]
     target: Name | None = None
     actions: bool = False
     robot_controls: bool = False
@@ -343,6 +358,11 @@ class NodeInfo(Boundary):
     error: ErrorInfo | None = None
 
 
+class OutputRef(Boundary):
+    step_id: Name
+    field: Name
+
+
 class Step(Boundary):
     step_id: Name
     skill: Name
@@ -350,6 +370,7 @@ class Step(Boundary):
     args: Annotated[dict[Name, Scalar], Field(max_length=16)] = Field(default_factory=dict)
     category: Literal["interactive", "background"] = "interactive"
     depends_on: Annotated[list[Name], Field(max_length=12)] = Field(default_factory=list)
+    inputs: Annotated[dict[Name, OutputRef], Field(max_length=8)] = Field(default_factory=dict)
 
 
 class Plan(Boundary):
@@ -362,7 +383,15 @@ class Plan(Boundary):
             raise ValueError("duplicate_step")
         if any(d not in ids for s in self.steps for d in s.depends_on):
             raise ValueError("missing_dependency")
-        tuple(TopologicalSorter({s.step_id: s.depends_on for s in self.steps}).static_order())
+        graph = {s.step_id: s.depends_on for s in self.steps}
+        ancestors = {}
+        for name in TopologicalSorter(graph).static_order():
+            ancestors[name] = set(graph[name]).union(*(ancestors[d] for d in graph[name]))
+        for step in self.steps:
+            if step.args.keys() & step.inputs.keys():
+                raise ValueError("duplicate_argument_binding")
+            if any(ref.step_id not in ancestors[step.step_id] for ref in step.inputs.values()):
+                raise ValueError("input_must_reference_preceding_step")
         return self
 
 

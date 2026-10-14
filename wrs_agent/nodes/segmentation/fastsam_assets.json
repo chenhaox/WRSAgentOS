@@ -1,0 +1,13 @@
+{
+  "model": "FastSAM-x",
+  "release": "v8.4.0",
+  "release_id": 276461319,
+  "asset_id": 340059253,
+  "filename": "FastSAM-x.pt",
+  "size": 144972346,
+  "sha256": "752cadc2828edb1cd4bc4f9eb587100631af06ea2108f4c9ed56df4755701e76",
+  "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/FastSAM-x.pt",
+  "license": "AGPL-3.0",
+  "license_url": "https://github.com/ultralytics/ultralytics/blob/v8.4.175/LICENSE",
+  "upstream": "https://docs.ultralytics.com/models/fast-sam/"
+}

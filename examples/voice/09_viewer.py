@@ -278,7 +278,8 @@ if __name__ == "__main__":
             active = "、".join(overview["active_actions"])
             done = "；".join(f"{name}={state}" for name, state in overview["steps"].items())
             plan_panel.set_value("steps", f"执行中 {active}｜{done}" if active else done or "无")
-            plan_panel.set_value("fault", describe_fault(overview["error"]))
+            fault = overview.get("planning_error") if verdict == "FAILED" else None
+            plan_panel.set_value("fault", describe_fault(fault or overview["error"]))
             plan_panel.set_value(
                 "calls",
                 f"模型 {overview['planner_calls']} 次"
@@ -317,7 +318,9 @@ if __name__ == "__main__":
         world.schedule_interval(show_progress, 0.3)
         try:
             # 这个帮助函数只管理页面服务，场景和刷新逻辑都在本文件。
-            with viewer_hub(VIEWER_PORT):
+            with viewer_hub(VIEWER_PORT, camera={
+                "endpoint": "tcp/127.0.0.1:7451", "env_id": "voice-goal",
+            }):
                 print(f"打开 http://127.0.0.1:{VIEWER_PORT}，Ctrl+C 退出观察。", flush=True)
                 print("按住“按住说话”说“向前移动”；说“停止”会立即走控制通道。", flush=True)
                 print("上一条未完成时说新目标，会先停下上一条再提交。", flush=True)

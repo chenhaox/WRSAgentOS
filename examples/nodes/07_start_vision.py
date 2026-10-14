@@ -16,7 +16,7 @@ from pathlib import Path
 
 from examples._session import use_local_token
 from wrs_agent.nodes.serve import serve_node
-from wrs_agent.nodes.vision import GraspabilityNode, GraspNetNode, Sam3Node, YoloNode
+from wrs_agent.nodes.vision.nodes import GraspabilityNode, GraspNetNode, Sam3Node, YoloNode
 
 NODES = (
     (YoloNode, "yolo"),

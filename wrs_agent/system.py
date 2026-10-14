@@ -25,7 +25,7 @@ from wrs_agent.skills import lookup_skills, skill_specs
 from wrs_agent.transport import Transport
 
 
-def step(skill, *, after=(), **args):
+def step(skill, *, after=(), inputs=None, **args):
     """Steps without dependencies may run concurrently on different resources."""
     dependencies = [after] if isinstance(after, Step) else list(after)
     return Step(
@@ -34,6 +34,7 @@ def step(skill, *, after=(), **args):
         version=None,  # Resolved from the provider before creating an execution.
         args=args,
         depends_on=[item.step_id for item in dependencies],
+        inputs=inputs or {},
     )
 
 

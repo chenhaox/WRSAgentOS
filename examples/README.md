@@ -1,6 +1,31 @@
 # 示例：一份脚本，一件事
 
-每份脚本直接写出配置、调用和结果；没有命令行参数，也没有运行模式开关。修改目标、文本或地址时，直接改代码。先读最简单的一份，再按需要看其他文件。
+每份脚本直接写出配置、调用和结果。基础例子的目标、文本和地址直接写在代码中；
+相机例子的设备、权重与硬件开关也写在文件顶部，不需要命令行参数。
+先读最简单的一份，再按需要看其他文件。
+
+相机与视觉播报见 [运行说明](../docs/CAMERA.md)。当前 camera/01、02、03 已配置为
+语音环境 `7451 / voice-goal / voice`：先运行 `voice/07_start_llm_voice.py`，再运行
+相机 01、按需运行 YOLO 03，最后运行 `voice/09_viewer.py`；02 是可选独立预览。
+07 已有 Router、Agent 和 TTS，不额外运行相机的 00、04、05。
+
+如要使用独立相机模式，先将 01、02、03 的 ENDPOINT/ENV_ID/SESSION 一起改回
+`tcp/127.0.0.1:7449` / `wrs-demo` / `wrs`，再在三个终端依次运行
+[`camera/00_start_router.py`](camera/00_start_router.py) →
+[`01_start_camera.py`](camera/01_start_camera.py) → [`02_read_frame.py`](camera/02_read_frame.py)。
+00 启动本组 Router 并准备共享口令；01 使用顶部 BACKEND 选择相机，
+`02_read_frame.py` 用 OpenCV 显示 RGB 和接收 FPS（Q/Esc 退出），
+`03_start_yolo.py` 加载本地检测模型。需要播报时，继续依次运行
+[`04_start_tts.py`](camera/04_start_tts.py) → [`05_start_agent.py`](camera/05_start_agent.py) →
+[`06_speak_objects.py`](camera/06_speak_objects.py)。04 提供 TTS（默认 Mock 无声），
+05 启动调度固定任务的 Agent（默认不调用大模型），06 把检测描述交给 TTS 播报一次。
+00、01、03、04、05 保持运行，02 只是可选预览，不影响 YOLO。
+YOLO 可以先于相机启动；无新鲜帧时不产生有效的新检测，断开后清除当前结果并重试。
+如果已用 `wrs/05_start_node.py` 启动了 Router 和 Agent，就不用本组的 00、05。
+使用 D405 时，在 01 顶部设置 `BACKEND = "realsense"`，选择后运行即打开真实相机；
+`SERIAL = ""` 使用默认相机，多台设备时可以填写指定序列号。
+YOLO 只需修改 `WEIGHTS`（本地文件指纹自动计算），真实 TTS 则修改 `BACKEND = "qwen"`。
+现有 `wrs/07_viewer.py` 和 `voice/09_viewer.py` 都包含相机面板和未连接提示。
 
 从仓库根目录运行：
 
@@ -204,10 +229,17 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 ## 中文语音与独立播报
 
+视觉抓取从 [RealSense 示例 00–06](grasping/README.md) 开始，顶部修改配置后直接运行，
+无需脚本参数。D405 → YOLO-World → FastSAM → GraspNet 输出同帧抓取候选；不包含
+合成相机或模型替身，不执行机械臂动作。真实执行接口和实测外参尚未完成。
+已有 camera 的 Router、RealSense 和 Agent 可复用，模型环境/启动顺序见该目录说明。
+固定标定合同、环境与权重、许可及验证范围见 [VISUAL_GRASP.md](../docs/VISUAL_GRASP.md)。
+
 | 目录 | 从哪里开始 |
 |---|---|
 | [wrs](wrs/README.md) | 运动、停止、场景快照和 WRS 显示，01–08 |
 | [voice](voice/README.md) | 文字控制 01–03；本地按键语音 05–06；在线模型循环语音 07–09 |
 | [tts](tts/README.md) | 01 启动并播报预热；02 说话；03 取消合成/播放 |
+| [grasping](grasping/README.md) | RealSense 采集、目标定位/分割与抓姿候选，00–06 |
 
 原 wrs/08、09 移至 [voice/05](voice/05_start_wrs_voice.py)、[voice/06](voice/06_push_to_talk.py)，配合 [wrs/07_viewer.py](wrs/07_viewer.py)。在线语音采用另一地址与自己的 viewer，避免误连本地规划模板。安装和下载见 [Qwen 指南](../docs/QWEN_SPEECH.md)。自动验收不会启动麦克风、扬声器或付费模型。

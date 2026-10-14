@@ -1,0 +1,17 @@
+{
+  "repo": "facebook/sam3",
+  "revision": "3c879f39826c281e95690f02c7821c4de09afae7",
+  "weights": "model.safetensors",
+  "weights_size": 3439938512,
+  "note": "Official public metadata hides the gated weight digest. Supply a trusted SHA256 explicitly; it is not supplied or verified against upstream by this manifest.",
+  "files": [
+    {"path": "LICENSE", "size": 7352, "git_sha1": "16ee5f6318102430087a4a779f04417a21d7cd18"},
+    {"path": "config.json", "size": 25843, "git_sha1": "3e600e765b0f1b4c52680aed9ad242c9a90f7ed1"},
+    {"path": "merges.txt", "size": 524619, "git_sha1": "76e821f1b6f0a9709293c3b6b51ed90980b3166b"},
+    {"path": "processor_config.json", "size": 1712, "git_sha1": "9d3bd6df8a54852cd56087a3ae019cce051de2b2"},
+    {"path": "special_tokens_map.json", "size": 588, "git_sha1": "cf0682d6de72c1547f41b4f6d7c59f62deffef94"},
+    {"path": "tokenizer.json", "size": 3642073, "git_sha1": "bd1e367764006ad6a2249b1dcc0b20879c7c211f"},
+    {"path": "tokenizer_config.json", "size": 799, "git_sha1": "1f20c0274c5d4581b5ccdcbdddd7a22729b5c57b"},
+    {"path": "vocab.json", "size": 862328, "git_sha1": "182766ce89b439768edadda342519f33802f5364"}
+  ]
+}

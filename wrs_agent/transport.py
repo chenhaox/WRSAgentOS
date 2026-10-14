@@ -13,6 +13,8 @@ import zenoh
 from wrs_agent.errors import AgentError, error_info, from_exception
 from wrs_agent.schemas import MAX_BYTES, Envelope, ErrorInfo, decode, encode, new_id
 
+MAX_DATA_BYTES = 32 * 1024 * 1024
+
 
 class RemoteError(AgentError):
     pass
@@ -90,14 +92,17 @@ class Transport:
         self.loop = asyncio.get_running_loop()
         self.normal = Inbox(64, self.loop)
         self.control = Inbox(16, self.loop)
+        self.data = Inbox(2, self.loop)
         self.handles = []
         self.workers = [
             asyncio.create_task(self._serve(self.normal)),
             asyncio.create_task(self._serve(self.normal)),
             asyncio.create_task(self._serve(self.control)),
+            asyncio.create_task(self._serve(self.data, binary=True)),
         ]
         self.normal_slots = asyncio.Semaphore(32)
         self.control_slots = asyncio.Semaphore(4)
+        self.data_slots = asyncio.Semaphore(2)
         self.callback_threads = set()
         self.loop_thread = threading.get_ident()
 
@@ -106,9 +111,12 @@ class Transport:
             raise ValueError("exact_service_key_required")
         return f"{self.prefix}/{suffix}"
 
-    def register_handler(self, suffix, handler, *, control=False):
+    def register_handler(self, suffix, handler, *, control=False, binary=False):
+        """Binary replies have their own bounded worker; requests remain small and authenticated."""
+        if binary and control:
+            raise ValueError("data_is_not_control")
         key = self.key(suffix)
-        inbox = self.control if control else self.normal
+        inbox = self.data if binary else self.control if control else self.normal
 
         def receive(query):
             self.callback_threads.add(threading.get_ident())
@@ -127,7 +135,7 @@ class Transport:
         )
         self.handles.append(handle)
 
-    async def _serve(self, inbox):
+    async def _serve(self, inbox, *, binary=False):
         while True:
             query, key, handler = await inbox.get()
             try:
@@ -140,23 +148,43 @@ class Transport:
                 ):
                     raise AgentError("unauthorized")
                 result = await handler(envelope.payload)
-                reply = {"ok": True, "result": result}
+                if binary:
+                    if not isinstance(result, bytes) or len(result) > MAX_DATA_BYTES:
+                        raise AgentError("payload_too_large")
+                    reply, encoding = result, zenoh.Encoding.APPLICATION_OCTET_STREAM
+                else:
+                    reply = encode({"ok": True, "result": result})
+                    encoding = zenoh.Encoding.APPLICATION_JSON
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 # Validation errors can contain input (including credentials). Do not echo them.
                 error = from_exception(exc, node_id=getattr(self, "node_id", None))
-                reply = {"ok": False, "error": error.model_dump()}
+                reply = encode({"ok": False, "error": error.model_dump()})
+                encoding = zenoh.Encoding.APPLICATION_JSON
             with contextlib.suppress(Exception):
-                query.reply(key, encode(reply))
+                # Zenoh 1.9 replies inherit request QoS, including background data queries.
+                query.reply(key, reply, encoding=encoding)
             del query
 
     async def request(self, suffix, payload, *, timeout=2.0, control=False, category="interactive"):
+        return await self._request(
+            suffix, payload, timeout=timeout, control=control, category=category,
+        )
+
+    async def request_bytes(self, suffix, payload, *, timeout=2.0):
+        return await self._request(
+            suffix, payload, timeout=timeout, category="background", binary=True,
+        )
+
+    async def _request(
+        self, suffix, payload, *, timeout, control=False, category="interactive", binary=False,
+    ):
         key = self.key(suffix)
         if category not in {"control", "interactive", "background"}:
             raise ValueError("unknown_message_category")
         category = "control" if control else category
-        slots = self.control_slots if control else self.normal_slots
+        slots = self.data_slots if binary else self.control_slots if control else self.normal_slots
         async with asyncio.timeout(timeout):
             async with slots:
                 envelope = Envelope(
@@ -191,6 +219,11 @@ class Transport:
                         if reply is not None:
                             if reply.ok is None:
                                 raise RemoteError("query_error")
+                            is_data = reply.ok.encoding == zenoh.Encoding.APPLICATION_OCTET_STREAM
+                            if binary and is_data:
+                                if len(reply.ok.payload) > MAX_DATA_BYTES:
+                                    raise RemoteError("payload_too_large")
+                                return reply.ok.payload.to_bytes()
                             message = decode(reply.ok.payload.to_bytes())
                             if not message.get("ok"):
                                 try:
@@ -198,6 +231,8 @@ class Transport:
                                 except ValueError:
                                     raise RemoteError("invalid_reply") from None
                                 raise RemoteError(error)
+                            if binary:
+                                raise RemoteError("invalid_reply")
                             return message["result"]
                         await asyncio.sleep(0.005)
                 finally:
@@ -226,6 +261,7 @@ class Transport:
     async def close(self):
         self.normal.close()
         self.control.close()
+        self.data.close()
         for handle in self.handles:
             handle.undeclare()
         for worker in self.workers:

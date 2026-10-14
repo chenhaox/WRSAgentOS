@@ -13,6 +13,22 @@ from pydantic import ValidationError  # noqa: E402
 from wrs_agent.schemas import ErrorInfo  # noqa: E402
 
 _MESSAGES = {
+    "llm_invalid_reply": (
+        "模型返回的格式不符合所选协议；未创建任务。"
+        "请检查 LLM_PROTOCOL，并确认模型通过 propose_plan 返回单个完整计划。"
+    ),
+    "llm_unexpected_tool": (
+        "模型调用了未提供的工具；未创建任务。"
+        "模型只能调用 propose_plan，describe_objects、speak 等技能须写在 plan.steps 中。"
+    ),
+    "llm_plan_json_invalid": (
+        "模型的 propose_plan 参数不是完整合法的 JSON；未创建任务。"
+        "请使用支持结构化工具调用的模型，参数中不能包含代码围栏或说明文字。"
+    ),
+    "llm_plan_invalid": (
+        "模型提案不符合计划结构；未创建任务。"
+        "请按 propose_plan 的结构填写 kind、plan.steps、depends_on 和 inputs。"
+    ),
     "llm_model_missing": (
         "请把 LLM_MODEL 设为账号上已开通的模型 ID；LLM_API_KEY 与 LLM_BASE_URL 不会选择模型。"
         "旧版 GLM_* 变量已改为 LLM_*，见 .env.example。使用 .env 时需让 IDE 运行配置加载该文件。"

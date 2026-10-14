@@ -1,0 +1,14 @@
+{
+  "filename": "checkpoint-rs.tar",
+  "size": 12468415,
+  "sha256": "60680087c61cba2b6791614fef1519071e294f6dcaf99b3f581bb95f7c51a868",
+  "checksum_origin": "first_download_local_sha256",
+  "upstream_sha256_available": false,
+  "first_download_date": "2026-10-13",
+  "source_revision": "280c215129f759ed8649cb4e89fc5dfee55f4f80",
+  "drive_file_id": "1hd0G8LN6tRpi4742XOTEisbTXNZ-1jmk",
+  "url": "https://drive.usercontent.google.com/download?id=1hd0G8LN6tRpi4742XOTEisbTXNZ-1jmk&export=download&confirm=t",
+  "upstream_readme": "https://github.com/graspnet/graspnet-baseline/blob/280c215129f759ed8649cb4e89fc5dfee55f4f80/README.md",
+  "license": "Noncommercial internal research only; see upstream license",
+  "license_url": "https://github.com/graspnet/graspnet-baseline/blob/280c215129f759ed8649cb4e89fc5dfee55f4f80/LICENSE"
+}

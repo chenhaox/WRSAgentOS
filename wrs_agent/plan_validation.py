@@ -54,5 +54,18 @@ def validate_plan(plan, features, bindings):
             raise AgentError("unsupported_skill_on_current_node", node_id=node, stage="preflight")
         steps.append(step.model_copy(update={"version": spec.version}))
     plan = Plan(steps=steps)
+    by_id = {step.step_id: step for step in plan.steps}
+    for step in plan.steps:
+        target = specs[step.skill]
+        for parameter, ref in step.inputs.items():
+            if parameter not in target.result_parameters:
+                raise AgentError("result_input_not_allowed", stage="preflight")
+            source = specs[by_id[ref.step_id].skill]
+            output = (source.output or {}).get("properties", {}).get(ref.field)
+            argument = target.parameters.get("properties", {}).get(parameter)
+            if (not output or not argument or output.get("type") not in
+                    {"string", "number", "integer", "boolean"}
+                    or output.get("type") != argument.get("type")):
+                raise AgentError("incompatible_step_output", stage="preflight")
     require_ordered_resources(plan, specs)
     return plan

@@ -1,0 +1,11 @@
+{
+  "model": "YOLOv8m-Worldv2",
+  "filename": "yolov8m-worldv2.pt",
+  "release": "v8.4.0",
+  "asset_id": 340060299,
+  "size": 57233192,
+  "sha256": "b614d33aa35b8e61d988041ff6939dfb3ed627af88ccaf643e4cdb822eb41d71",
+  "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8m-worldv2.pt",
+  "license": "AGPL-3.0",
+  "license_url": "https://github.com/ultralytics/ultralytics/blob/v8.4.175/LICENSE"
+}

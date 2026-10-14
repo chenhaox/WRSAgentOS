@@ -1,5 +1,5 @@
-"""Perception nodes. Models stay in their own interpreters."""
+"""Camera YOLO node. Resident model workers stay in wrs_agent.nodes.vision.nodes."""
 
-from wrs_agent.nodes.vision.nodes import GraspabilityNode, GraspNetNode, Sam3Node, YoloNode
+from wrs_agent.nodes.vision.node import YoloNode
 
-__all__ = ["GraspabilityNode", "GraspNetNode", "Sam3Node", "YoloNode"]
+__all__ = ["YoloNode"]
