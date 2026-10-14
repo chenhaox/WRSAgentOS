@@ -58,6 +58,15 @@ class GraspData:
     segment: SegmentData
 
 
+class LatestGrasps(Boundary):
+    """Read-only discovery; the referenced artifact still requires all normal checks."""
+
+    candidate_set_id: Name
+    task_id: Name
+    observation_id: Name
+    age_s: float = Field(ge=0)
+
+
 def pack_grasps(data, age_s):
     header = data.info.model_dump_json().encode()
     return b"".join((struct.pack("<I", len(header)), header, pack_segment(data.segment, age_s)))

@@ -39,7 +39,7 @@ include = ["wrs_agent*"]
 
 [tool.setuptools.package-data]
 "wrs_agent.drivers.cameras" = ["LICENSE.legacy-wrs"]
-"wrs_agent.nodes.camera" = ["panel.js"]
+"wrs_agent.nodes.camera" = ["panel.js", "scene.js"]
 "wrs_agent.nodes.asr" = ["assets.json"]
 "wrs_agent.nodes.tts" = ["assets.json"]
 "wrs_agent.nodes.segmentation" = ["assets.json", "fastsam_assets.json", "clip_assets.json"]

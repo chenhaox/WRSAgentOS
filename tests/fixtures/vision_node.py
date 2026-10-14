@@ -18,6 +18,8 @@ class FixtureDetector:
     def detect(self, rgb):
         width, height = map(int, sys.argv[3:5]) if len(sys.argv) >= 5 else (320, 240)
         assert rgb.shape == (height, width, 3) and rgb.dtype.name == "uint8"
+        if len(sys.argv) >= 6:
+            time.sleep(float(sys.argv[5]))  # Optional inference latency, never real model loading.
         return [Object2D(instance_id="0", label="cup", score=0.9, box=[20., 20., 80., 80.])]
 
     def locate(self, rgb, target):

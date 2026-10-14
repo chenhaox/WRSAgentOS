@@ -7,6 +7,7 @@ import pytest
 from conftest import eventually
 
 from wrs_agent.nodes.camera.client import CameraClient
+from wrs_agent.nodes.camera.preview import CameraPreview
 from wrs_agent.nodes.grasp.data import read_grasps
 from wrs_agent.processes import ROOT, LocalStack, python_command
 from wrs_agent.runtime import Runtime
@@ -29,10 +30,11 @@ def preparation(target="box", *, region=False):
 
 
 @pytest.mark.parametrize("segmentation", ["sam3", "segmentation", "segmentation-box"])
-async def test_same_frame_pipeline_ambiguity_and_late_cancel(segmentation):
+async def test_same_frame_pipeline_ambiguity_and_late_cancel(segmentation, monkeypatch):
     region = segmentation == "segmentation-box"
     target = "cup" if region else "box"
     async with LocalStack(duration=.03) as stack:
+        monkeypatch.setenv("WRS_AGENT_TOKEN", stack.token)
         stack._spawn("camera", python_command(ROOT / "tests/fixtures/camera_node.py",
                                                stack.endpoint, stack.env_id))
         if region:
@@ -78,6 +80,16 @@ async def test_same_frame_pipeline_ambiguity_and_late_cancel(segmentation):
                 await eventually(runtime.snapshot, lambda s: s["state"] == "FAILED")
             latest, _, _ = await CameraClient(registry.transport("camera")).read()
             assert latest.observation_id != output["observation_id"]
+            ui = CameraPreview(endpoint=stack.endpoint, env_id=stack.env_id)
+            await ui.start()
+            try:
+                await ui._update("grasps")
+                assert ui.latest["grasps"]["state"] == "ready", ui.latest["grasps"]
+                assert ui.latest["grasps"]["observation_id"] == output["observation_id"]
+                assert ui.latest["grasps"]["candidate_set_id"] == output["candidate_set_id"]
+                assert len(ui.latest["grasps"]["grasps"]) == 1
+            finally:
+                await ui.close()
             np.testing.assert_allclose(data.segment.arrays["points"][:, :, 2],
                                        data.segment.arrays["depth"] * .001)
             # A new task cannot use another task's segment reference.

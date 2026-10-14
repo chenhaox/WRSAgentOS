@@ -205,6 +205,11 @@ async def test_planning_error_does_not_leak_inputs_through_result_or_cache(make_
         assert set(runtime.cache.failures.values()) == {"internal_error"}
         assert "private-planner-input" not in str(result)
         assert "private-planner-input" not in str(runtime.snapshot())
+        overview = runtime.snapshot()
+        assert overview["planning_error"] == result["error"]
+        assert overview["error"] is None and overview["task_id"] is None
+        overview["planning_error"]["code"] = "changed-by-caller"
+        assert runtime.snapshot()["planning_error"]["code"] == "internal_error"
         result["error"]["code"] = "changed-by-caller"
         assert runtime.goal_status("failed-plan")["error"]["code"] == "internal_error"
         assert env.executions == 0

@@ -20,28 +20,30 @@ async def test_camera_backend_is_the_explicit_hardware_choice(monkeypatch, backe
     await main()
     assert serve.await_args.kwargs["options"] == {
         "backend": backend, "serial": "", "allow_hardware": backend == "realsense",
+        "width": entry["WIDTH"], "height": entry["HEIGHT"], "fps": entry["FPS"],
     }
 
 
 async def test_yolo_fingerprints_selected_local_file_without_manual_checksum(tmp_path, monkeypatch):
-    entry = runpy.run_path("examples/camera/03_start_yolo.py")
+    entry = runpy.run_path("examples/camera/02_start_yolo.py")
     main = entry["main"]
     weights = tmp_path / "detector.pt"
     weights.write_bytes(b"fixture")
     serve = AsyncMock()
-    for name, value in {"WEIGHTS": weights,
+    for name, value in {"WEIGHTS": weights, "CONFIDENCE": 0.65,
                         "use_local_token": Mock(), "serve_node": serve}.items():
         monkeypatch.setitem(main.__globals__, name, value)
     await main()
     options = serve.await_args.kwargs["options"]
     assert options["weights"] == weights
     assert options["weights_sha256"] == hashlib.sha256(b"fixture").hexdigest()
+    assert options["confidence"] == 0.65
 
 
 @pytest.mark.parametrize("filename,exists", [("missing.pt", False), ("wrong.txt", True)])
 async def test_yolo_requires_local_checkpoint_before_connecting(tmp_path, monkeypatch,
                                                              filename, exists):
-    entry = runpy.run_path("examples/camera/03_start_yolo.py")
+    entry = runpy.run_path("examples/camera/02_start_yolo.py")
     main = entry["main"]
     weights = tmp_path / filename
     if exists:
@@ -59,7 +61,7 @@ async def test_yolo_requires_local_checkpoint_before_connecting(tmp_path, monkey
 
 @pytest.fixture
 def speech_example(monkeypatch):
-    main = runpy.run_path("examples/camera/06_speak_objects.py")["main"]
+    main = runpy.run_path("examples/camera/05_speak_objects.py")["main"]
     completed = SimpleNamespace(state="SUCCEEDED", reason="")
     task = SimpleNamespace(wait=AsyncMock(return_value=completed))
     system = SimpleNamespace(
@@ -82,7 +84,7 @@ def speech_example(monkeypatch):
 
 
 @pytest.mark.parametrize("missing,script", [
-    ("agent", "05_start_agent.py"), ("yolo", "03_start_yolo.py"), ("tts", "04_start_tts.py"),
+    ("agent", "04_start_agent.py"), ("yolo", "02_start_yolo.py"), ("tts", "03_start_tts.py"),
 ])
 async def test_speech_identifies_missing_service_before_submitting_task(speech_example, missing,
                                                                       script):

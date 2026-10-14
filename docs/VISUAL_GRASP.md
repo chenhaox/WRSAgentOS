@@ -11,6 +11,14 @@ D405 节点到全部真实模型的联合运行及物理抓取仍未验证。
 用户入口是 [RealSense 示例 00–06](../examples/grasping/README.md)，全部顶部配置、
 无脚本参数。虚拟模型/标定只在 tests/fixtures/grasping 中供回归使用，不能用于硬件。
 
+`voice/09_viewer.py` 现可在 WRS 主场景查看实时点云与抓取快照，入口是“点云 → 抓取候选”。
+GraspNet 的 `request/grasp/latest` 返回小型 candidate_set_id/task_id/observation_id/age_s；
+后续沿用 `request/grasp/data` 读取同帧数据。发现接口同样检查动作成功、boot/epoch、
+上游分割和 TTL，不给执行授权；新推理开始后不回退显示旧任务。候选最多 8 个、点云
+最多 8192 点，预览不会重新推理。没有外参时只在明确标记的相机展示区布局，不能拿它
+判断机器人空间碰撞。语音与 grasping 示例需使用同一环境，见
+[接入说明](../examples/voice/README.md#在主场景查看点云和抓取候选)。
+
 ## 已下载的 FastSAM-x
 
 选择官方 Ultralytics assets `v8.4.0` 的 FastSAM-x（144,972,346 字节，约 145 MB）。
@@ -20,9 +28,9 @@ D405 节点到全部真实模型的联合运行及物理抓取仍未验证。
 权重位于 `.local/models/fastsam/FastSAM-x.pt`，Git 忽略。
 
 ```powershell
-$env:WRS_AGENT_PYTHON = 'python'
+$env:WRS_AGENT_PYTHON = 'D:/code/venv312/.venv/Scripts/python.exe'
 ./scripts/setup_vision.ps1
-& 'python' -X utf8 -S scripts/download_fastsam.py --download
+& 'D:/code/venv312/.venv/Scripts/python.exe' -X utf8 -S scripts/download_fastsam.py --download
 & '.local/venvs/vision/Scripts/python.exe' scripts/check_fastsam.py
 ```
 
@@ -47,7 +55,7 @@ setup 安装锁定的 fastsam extra，在独立 `.local/venvs/vision` 安装 SDK
 掩码做 CLIP 排名不同。连续播报保留默认类别；目标检测在同一工作线程执行，结束或
 失败都会恢复原词表。没有再创建一套节点生命周期。
 
-本机复用 已有本地 yolov8m-worldv2.pt，57,233,192 字节，与官方 assets
+本机复用 D:/code/test_ultralytics/yolov8m-worldv2.pt，57,233,192 字节，与官方 assets
 v8.4.0 的 SHA256 一致，复制到 `.local/models/yolo/yolov8m-worldv2.pt`；没有新增下载。
 来源、哈希及 AGPL-3.0 许可清单是 `nodes/vision/assets.json`。文字编码器复用下一节
 所述的已校验 CLIP，节点禁止自动下载。新机器必须显式准备两份资产。
@@ -218,7 +226,7 @@ MuJoCo 转换器应用结构忽略时可能漏掉挂载夹爪，adapter 因此�
 开发回归，通过下面的测试运行，无设备或云调用：
 
 ```powershell
-& 'python' -X utf8 -S scripts/run.py -m pytest tests/integration/test_visual_grasp.py -q
+& 'D:/code/venv312/.venv/Scripts/python.exe' -X utf8 -S scripts/run.py -m pytest tests/integration/test_visual_grasp.py -q
 ```
 
 该测试保留实际 Planner / ASR / Voice 协议、Zenoh 与 WRS 虚拟几何验证，使用 tests
@@ -228,7 +236,7 @@ SAM3 使用 Transformers 图像 API，独立环境包含锁定的 Transformers 5
 Torch 2.9.0 CU128、Torchvision 0.24.0 CU128；不改变已有语音环境：
 
 ```powershell
-$env:WRS_AGENT_PYTHON = 'python'
+$env:WRS_AGENT_PYTHON = 'D:/code/venv312/.venv/Scripts/python.exe'
 ./scripts/setup_sam3.ps1
 & '.local/venvs/sam3/Scripts/python.exe' scripts/check_sam3.py --report reports/sam3_sdk.json
 ```
@@ -298,7 +306,7 @@ trained_inference；前向通过不代表模型已经能够预测可用抓姿。
 用户已明确授权非商业内部研究用途。权重下载与离线推理可复现为：
 
 ```powershell
-& 'python' -X utf8 -S scripts/download_graspnet.py --download
+& 'D:/code/venv312/.venv/Scripts/python.exe' -X utf8 -S scripts/download_graspnet.py --download
 & '.local/venvs/graspnet/Scripts/python.exe' scripts/check_graspnet.py --weights .local/models/graspnet/checkpoint-rs.tar --sha256 60680087c61cba2b6791614fef1519071e294f6dcaf99b3f581bb95f7c51a868 --input reports/graspnet_rgbd_corrected_0_input.npz --report reports/graspnet_trained.json
 # 需要运行常驻节点时，由操作者另开终端；默认连接 FastSAM 的 segmentation 节点。
 & '.local/venvs/graspnet/Scripts/python.exe' -m examples.grasping.04_start_graspnet

@@ -58,7 +58,9 @@ def test_yolo_requires_local_checkpoint_and_verified_bytes(tmp_path, monkeypatch
         YoloDetector(path, "0" * 64)
 
 
-def test_yolo_adapter_passes_bgr_and_normalizes_model_output(tmp_path, monkeypatch):
+@pytest.mark.parametrize("confidence", [0.35, 0.65])
+def test_yolo_adapter_passes_bgr_and_confidence_and_normalizes_output(tmp_path, monkeypatch,
+                                                                   confidence):
     class Tensor:
         def __init__(self, data):
             self.data = np.array(data)
@@ -78,6 +80,7 @@ def test_yolo_adapter_passes_bgr_and_normalizes_model_output(tmp_path, monkeypat
         def predict(self, bgr, **options):
             assert bgr[0, 0].tolist() == [30, 20, 10] and bgr.flags.c_contiguous
             assert options["max_det"] == 32 and options["save"] is False
+            assert options["conf"] == confidence
             boxes = SimpleNamespace(xyxy=Tensor([[1, 2, 3, 4]]),
                                     conf=Tensor([0.9]), cls=Tensor([0]))
             return [SimpleNamespace(boxes=boxes, names={0: "cup"})]
@@ -87,7 +90,8 @@ def test_yolo_adapter_passes_bgr_and_normalizes_model_output(tmp_path, monkeypat
     ))
     path = tmp_path / "test.pt"
     path.write_bytes(b"fixture-only")
-    detector = YoloDetector(path, hashlib.sha256(path.read_bytes()).hexdigest())
+    detector = YoloDetector(path, hashlib.sha256(path.read_bytes()).hexdigest(),
+                            confidence=confidence)
     rgb = np.full((8, 8, 3), [10, 20, 30], dtype=np.uint8)
     items = detector.detect(rgb)
     assert items[0].label == "cup" and items[0].box == [1., 2., 3., 4.]
@@ -116,3 +120,42 @@ def test_world_detector_restores_announcement_vocabulary_after_failure():
         detector.locate(None, "red cup")
     assert model.txt_feats == "original" and model.names == {0: "cup"} and model.model[-1].nc == 1
     assert detector.model.predictor is None
+
+
+async def test_yolo_retains_only_two_paired_rgb_frames_and_rejects_expired_or_missing(monkeypatch):
+    from wrs_agent.drivers.cameras.synthetic import SyntheticCamera
+    from wrs_agent.errors import AgentError
+    from wrs_agent.nodes.camera.frames import Observation, unpack_frame
+    from wrs_agent.nodes.vision import node as vision
+
+    camera = SyntheticCamera(width=32, height=24)
+    camera.open()
+    frame = camera.read()
+    camera.close()
+    info = Observation(observation_id="session.1", stream_id="session", sequence=1,
+                       captured_at_ns=frame.captured_at_ns, source=frame.source,
+                       frame_id=frame.frame_id, width=32, height=24, calibration=frame.calibration)
+    node = vision.YoloNode(options={"weights": "fixture.pt", "weights_sha256": "0" * 64})
+    node.frames, node.state = {}, vision.VisionState(health="ready")
+    now = [100.0]
+    monkeypatch.setattr(vision, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    for sequence in range(1, 4):
+        selected = info.model_copy(update={"observation_id": f"session.{sequence}",
+                                           "sequence": sequence})
+        node.retain_frame(str(sequence), selected, frame.rgb, 99.5)
+    assert list(node.frames) == ["2", "3"]
+    selected, arrays, age = unpack_frame(await node.result_frame({"result_id": "2"}))
+    assert selected.observation_id == "session.2" and age == 0.5 and set(arrays) == {"rgb"}
+    np.testing.assert_array_equal(arrays["rgb"], frame.rgb)
+    assert all(set(value[1].__dict__) == {"rgb"} for value in node.frames.values())
+    with pytest.raises(AgentError, match="vision_result_expired"):
+        await node.result_frame({"result_id": "1"})
+    now[0] = 102.0
+    with pytest.raises(AgentError, match="vision_result_expired"):
+        await node.result_frame({"result_id": "2"})
+    restarted = info.model_copy(update={"stream_id": "new", "observation_id": "new.1"})
+    node.retain_frame("new", restarted, frame.rgb, now[0])
+    assert list(node.frames) == ["new"]
+    node.state.health = "camera_or_detection_unavailable"
+    with pytest.raises(AgentError, match="vision_result_expired"):
+        await node.result_frame({"result_id": "new"})

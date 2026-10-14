@@ -58,6 +58,7 @@ flowchart LR
 | request/camera/frame | observation_id?、components、max_age_s；认证二进制 Query |
 | stream/vision/objects（YOLO target） | 至多 32 个二维对象及观测身份 |
 | request/vision/result（YOLO target） | 按 result_id 查询，最多保留最近 8 份 |
+| request/vision/frame（YOLO target） | 按 result_id 读取推理时 RGB；认证二进制 Query，至多两份、采集起两秒有效 |
 
 数据包为 4 字节 little-endian header 长度、JSON header、所选数组的原始字节，不使用
 pickle 或 base64 图像 JSON。`CameraClient.read()` 返回 `(observation, arrays, age_s)`；
@@ -74,7 +75,7 @@ pickle 或 base64 图像 JSON。`CameraClient.read()` 返回 `(observation, arra
 
 `drivers/cameras/` 不依赖 WRS、Zenoh 或模型；`nodes/camera/` 管采集生命周期、缓存和
 预览；`nodes/vision/` 管推理；`skills/vision/` 只选择结果并生成确定性短文本。
-旧 `wrs/drivers/devices/realsense/realsense_d400s.py` 的 frameset/点云
+旧 `D:\code\wrs\wrs\drivers\devices\realsense\realsense_d400s.py` 的 frameset/点云
 采集流程是本实现的参考。旧文件本身不导入 WRS；这里保留独立采集和点云生成，未迁移
 其 ArUco/脚本可视化与每次重新采集的分离 getters，增加数组所有权、深度比例、帧身份
 和关闭/重连。保留许可于
@@ -97,7 +98,7 @@ pickle 或 base64 图像 JSON。`CameraClient.read()` 返回 `(observation, arra
 | 原生深度 XYZ + UV 映射颜色 | 当前仅输出彩色网格 XYZ；原生深度/XYZ/UV 入口缺失 |
 | `intr_mat` / `intr_distcoeffs` | 内参/畸变已在 calibration 中；未提供 K 矩阵便捷属性 |
 | `get_color_img()` / `get_depth_img()` / `get_pcd()` | 改为一次读帧后取分量，避免各 getter 重新采集不同帧 |
-| mid/high 和 30 FPS | 底层可配置宽高/帧率，默认变为 848×480、15 FPS；设备支持仍需核实 |
+| mid/high 和 30 FPS | 底层可配置宽高/帧率，默认 848×480、15 FPS；camera/grasping 示例显式设为 30 FPS，设备支持仍需核实 |
 | `recognize_ar_marker()` 输出标记位姿 | 未迁移；应作为独立视觉函数，显式使用所选帧及内参 |
 | 按序列号创建多个实例的脚本 | 底层支持指定设备，缺设备列表及完整多相机示例；旧脚本也无硬件同步 |
 | `stop()` / `reset()` / `__del__()` | 有显式幂等 close；不自动硬件复位，不依赖析构关闭 |
@@ -111,10 +112,14 @@ Environment 外参加载只读取和检查矩阵，不会自动估计相机到�
 作为默认补齐项。保持示例顶部常量配置，不增加命令行参数。
 
 YOLO 默认 CPU、最多 5 次推理/秒、一次只执行一个推理，模型加载一次。只接受本地 `.pt`，
-不下载权重。节点校验文件与传入的 SHA256 一致；03 示例自动计算用户选定本地文件的
+不下载权重。节点校验文件与传入的 SHA256 一致；02 示例自动计算用户选定本地文件的
 指纹，不再要求手填。自算指纹用于记录身份，不是独立来源认证；需要严格固定版本时，
 部署方仍可给节点传入预先核验的哈希。按[官方输入合同](https://docs.ultralytics.com/modes/predict/)
 把 RGB 转为 BGR，输出像素 xyxy 框、类别、置信度和来源。没有承诺实际推理帧率。
+置信度过滤已经在推理入口生效：YoloOptions.confidence 默认 0.35，传给
+model.predict(conf=...)。02 顶部的 `CONFIDENCE = 0.35` 可直接调整（0 < 值 <= 1），
+修改后重启 02；过滤影响发布的检测、物体描述及定位结果，并非仅隐藏预览里的框。
+调高可减少低分结果，也可能漏掉目标；检测分数不等于实际识别正确概率。
 
 YOLO/SAM3 可共享观测编号、实例编号、框、可选 mask 引用等几何部分，但应保留标签来源、
 提示词和分数语义。当前 `Objects2D` 只实现 YOLO 置信度；SAM3 接入时扩展其分数种类和
@@ -137,34 +142,35 @@ say = step("speak", after=see,
 task = await system.start(see, say)
 ```
 
-默认播报“画面中识别到……”。只有设置 `03_start_yolo.py` 的 `TABLE_ROI = [x1, y1, x2, y2]`
+默认播报“画面中识别到……”。只有设置 `02_start_yolo.py` 的 `TABLE_ROI = [x1, y1, x2, y2]`
 （归一化坐标）才说“桌面区域”，
 含义是框中心位于人工指定区域，不表示验证了 3D 支撑关系。零检测说“未识别到物体”，
 不说“桌子是空的”。合成输入始终标明“合成测试”。结果不可用时等待后失败，不播报旧内容。
 
 ## 运行例子
 
-当前 camera/01、02、03 已配置为 **语音 07/09（8001 页面）**，配置与顺序见
+当前 camera/01、02、06 已配置为 **语音 07/09（8001 页面）**，配置与顺序见
 [语音相机配置](../examples/voice/README.md#在语音页面看相机通过语音调用-yolo)
 ：三项 ENDPOINT / ENV_ID / SESSION 为 `tcp/127.0.0.1:7451` / `voice-goal` / `voice`，
-由 voice/07 提供 Router、Agent、TTS；可直接运行 07 → 01 → 03 → 09，02 预览可选。
+由 voice/07 提供 Router、Agent、TTS；可直接运行 07 → 01 → 02 → 09，06 联合预览可选。
 
-下面的 00 → 01 → 02/03 是独立相机模式（7449）；使用这套命令前，必须将
-01、02、03 的三项配置一起改回 `tcp/127.0.0.1:7449` / `wrs-demo` / `wrs`。
+下面的 00 → 01 → 02 → 06 是独立相机模式（7449）；使用这套命令前，必须将
+01、02、06 的三项配置一起改回 `tcp/127.0.0.1:7449` / `wrs-demo` / `wrs`。
 两种环境不会自动互通，启动顺序不能弥补配置差异。
 
-`01_start_camera.py` **不会启动 Zenoh Router**，`02_read_frame.py` 也只连接已有服务。
+`01_start_camera.py` **不会启动 Zenoh Router**，`06_read_frame.py` 也只连接已有服务。
 独立相机模式连接 `tcp/127.0.0.1:7449`，属于 `wrs-demo` 环境、使用 `wrs` 会话口令。
-插入 D405 不会创建这个网络服务；直接运行 01 或 02，若 Router 尚未启动，都会在
+插入 D405 不会创建这个网络服务；直接运行 01 或 06，若 Router 尚未启动，都会在
 `zenoh.open` 报 `Unable to connect to any of [tcp/127.0.0.1:7449]`，此时尚未读取相机。
 本目录全部例子无命令行参数，需要调整的配置直接写在各文件顶部。
-先运行本组的 `00_start_router.py`，再依次运行 01 和 02；00 自动准备本机共享口令，
-只启动 Router。前两个进程保持运行，Ctrl+C 分别关闭；02 是交互预览窗口。
+先运行本组的 `00_start_router.py`，再运行 01、02，最后运行 06；00 自动准备本机共享
+口令，只启动 Router。前三个进程保持运行，Ctrl+C 分别关闭；06 是交互预览窗口。
+只看 RGB 可省略 02，不需要 TTS、Agent 或播报任务。
 
 在仓库根目录，每个常驻进程各开一个终端。相机依赖按真实 uv.lock 显式安装，不下载模型：
 
 ```powershell
-$py = 'python'
+$py = 'D:/code/venv312/.venv/Scripts/python.exe'
 $uv = '.local/tools/bin/uv.exe'
 & $uv --cache-dir .local/uv-cache export --frozen --extra camera --extra realsense --extra llm --no-emit-project --output-file .local/camera-requirements.txt
 & $uv --cache-dir .local/uv-cache pip sync --python $py --target .local/deps --require-hashes .local/camera-requirements.txt
@@ -173,32 +179,68 @@ $uv = '.local/tools/bin/uv.exe'
 ```powershell
 # 终端一：先启动本组 Router，保持运行。
 # 每个新终端都需重新设置 $py，工作目录均为仓库根目录。
-$py = 'python'
+$py = 'D:/code/venv312/.venv/Scripts/python.exe'
 & $py -X utf8 -S scripts/run.py examples/camera/00_start_router.py
 
 # 终端二：按文件顶部 BACKEND 选择相机，保持运行；D405 配置见下方。
-$py = 'python'
+$py = 'D:/code/venv312/.venv/Scripts/python.exe'
 & $py -X utf8 -S scripts/run.py examples/camera/01_start_camera.py
 
-# 终端三：OpenCV 实时 RGB 预览，显示接收 FPS；Q/Esc 或关闭窗口退出。
-$py = 'python'
-& $py -X utf8 -S scripts/run.py examples/camera/02_read_frame.py
+# 终端三：使用已安装 YOLO 依赖的 Python，加载已有本地权重；不自动下载。
+& 'D:/code/venv312/.venv/Scripts/python.exe' -m examples.camera.02_start_yolo
+
+# 终端四：OpenCV 同时显示 RGB、接收 FPS 和 YOLO 结果；Q/Esc 或关闭窗口退出。
+$py = 'D:/code/venv312/.venv/Scripts/python.exe'
+& $py -X utf8 -S scripts/run.py examples/camera/06_read_frame.py
 
 ```
 
 `-S scripts/run.py` 使用项目 `.local/deps`，避免直接运行时加载共享环境中不同版本的依赖。
-camera extra 包含带窗口支持的 `opencv-python`。02 仅请求 RGB，先转为 OpenCV 使用的
+camera extra 包含带窗口支持的 `opencv-python`。06 仅请求 RGB，先转为 OpenCV 使用的
 BGR 再显示，不下载整帧点云。FPS 按每秒收到的不同 `observation_id` 统计，重复图像不会
 重复计数；它是这个消费者的接收帧率，不是相机标称帧率或窗口刷新频率。
 一秒没有新鲜帧会清空旧画面并显示等待，退出关闭窗口和客户端连接，01 继续采集。
+06 左侧显示实时 RGB，右侧显示 YOLO 推理时的原图，叠加检测框、类别和置信度。
+后台至多每 0.2 秒读取一次 YOLO 状态，新 result_id 才查询结果与配套 RGB。节点只保留
+最近两份推理 RGB，采集起两秒过期，不写磁盘；使用已有相机二进制格式，不下载深度
+或点云。客户端校验观测编号、相机会话、来源、采集时间和尺寸后才绘框；实时画面
+即使已经前进，右侧仍与框严格配对。下方分别标明两个 observation_id，提示检测画面可能滞后。
+重复结果/下载不延长有效期；过期、节点不可用或来源相机会话不同时清除检测显示。
+有效的空列表单独显示“No objects detected”，不将节点故障解释成没有物体。
+更新后重启 02 和 06；旧版 YOLO 没有 request/vision/frame，无法提供同帧标注。
+读取已有结果不会触发额外推理或播报，也不依赖 03/04/05。
 Depth/XYZ 仍由相机节点提供，其他消费者可继续用 `CameraClient.read()` 读取。
 
 如果需要 WRS 页面，将终端一的 00 **替换为** `examples/wrs/05_start_node.py`，
 再另开终端运行 `examples/wrs/07_viewer.py`；不要同时启动两个占用 7449 的 Router。
-这两个 WRS 例子使用虚拟后端。仅运行相机的 00 → 01 → 02 不需要 WRS 节点或 viewer。
-打开 `http://127.0.0.1:8000` 可看到 WRS 页面。相机面板有 RGB/深度/可拖动点云，预览至多 2048 点、
-每秒约 4 次。未连接时显示提示，断开后清除旧画面，重连显示新会话；不阻塞 WRS 场景。
-浏览器不接收 Zenoh 会话凭据。
+这两个 WRS 例子使用虚拟后端。相机的 00 → 01 → 02 → 06 不需要 WRS 节点或 viewer。
+打开 `http://127.0.0.1:8000` 可看到 WRS 页面。相机面板有 RGB/深度/点云标签；点云直接
+绘制到 WRS 主场景，不再建立小窗口 canvas。RGB/深度预览上限 30 FPS，点云预览上限
+5 FPS、至多 8192 点，在像素网格两个方向均匀采样。面板显示每秒实际收到的
+不同观测数；此数值取决于采集、传输和编码耗时，不保证达到配置上限。
+浏览器只请求当前标签；后端仅获取对应分量（点云视图取 RGB+XYZ），不重复编码同一帧。
+一个 worker 串行处理、最多缓存四个视图（含抓取快照），最后一次请求过去 1.5 秒后停止读取并
+清理缓存。未连接时显示提示，旧观测过期或断开后清除画面，重连显示新会话；不阻塞
+WRS 场景。浏览器不接收 Zenoh 会话凭据。
+
+点云标签内可选择“实时点云”或“抓取候选”，点击“定位点云”移动观察视角。候选模式
+只读同环境的 `graspnet` 节点，通过 `request/grasp/latest` 找到最近完成且有效的结果，
+随后按编号读取配套点云；不会调用模型。每秒最多检查两次有效性，同一候选集只下载
+一次数据。最多显示按模型分数排序的前 8 个平行夹爪示意，绿色为第一名，橙色为其余；
+模型分数不代表成功概率，尚未碰撞检查。候选和点云始终取自同一推理观测，面板显示
+快照年龄；不把旧抓姿叠在实时点云上。结果超过 30 秒、上游失效、控制 epoch 变化、
+节点断开时清除。切换回 RGB/深度释放本层 GPU 缓冲，保留机器人场景。
+
+没有实测外参时，点云/抓姿在主场景的独立“相机展示区”显示，使用仅供布局的平移/旋转，
+不是与机器人已配准的 world 坐标。原始结果坐标不修改；显示不产生运动授权。接入
+voice/09 的具体配置与启动顺序见 [语音 viewer 抓姿说明](../examples/voice/README.md#在主场景查看点云和抓取候选)。
+
+相机 FPS 在 `examples/camera/01_start_camera.py` 或 `examples/grasping/01_start_camera.py`
+顶部配置：`WIDTH, HEIGHT, FPS = 848, 480, 30`。修改后重启所用的相机节点；预览代码升级
+还需要重启 viewer 并刷新网页。这里调整同帧 RGB、Depth、SDK XYZ 的采集频率，点云仍为
+每帧必需输出；降低的只是网页点云预览频率。YOLO 连续检测仍最多 5 Hz，目标定位、
+SAM/FastSAM、GraspNet 仍按任务执行，不随相机 FPS 增加调用次数。缓存仍限制为两帧。
+直接使用 `CameraOptions` 的调用者须显式传 `fps=30`；底层缺省值保持 15。
 
 使用 D405 时，停止合成相机，确认设备、现场、停止能力和监督条件，修改
 `01_start_camera.py` 顶部配置，再运行同一个文件：
@@ -214,7 +256,7 @@ SERIAL = ""  # 留空由 SDK 选择默认相机；多台设备时可填写指定
 只接一台 D405 时无需填写序列号。需要指定时可从 RealSense Viewer 的设备信息查看；
 读取时先关闭 Viewer 的相机流。首次由 SDK 选择可满足流配置的设备，取得实际序列号后
 锁定并启动采集；本次节点重连保持该设备，不因拔线切换另一台。帧坐标系包含实际序列号。
-`02_read_frame.py` 读取 01 发布的数据，不需要选择设备。
+`06_read_frame.py` 读取 01 发布的数据，不需要选择设备。
 保留 `BACKEND = "synthetic"` 时，即使插着 D405，01 也只生成合成数据。
 
 排查顺序：连接 7449 失败先检查终端一及 `ENDPOINT`；Router 可连接但找不到 camera
@@ -230,7 +272,7 @@ YOLO 建议使用独立环境，显式 `uv sync --frozen --extra camera --extra 
 操作者提供已确认来源、版本和许可证的检测权重，放 `.local/` 或仓库外；
 Ultralytics 采用 AGPL/商业许可选择，权重不提交 Git。
 
-`03_start_yolo.py` 默认使用 `.local/models/yolo/yolo26n.pt`，已按本机用户要求下载
+`02_start_yolo.py` 默认使用 `.local/models/yolo/yolo26n.pt`，已按本机用户要求下载
 Ultralytics YOLO26n 检测权重，并在脚本顶部附上
 [GitHub 官方下载链接](https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt)。
 固定 assets release v8.4.0；5,544,453 字节，已与 GitHub 资产 API 的 SHA256 核对：
@@ -240,7 +282,8 @@ Ultralytics YOLO26n 检测权重，并在脚本顶部附上
 [官方许可说明](https://www.ultralytics.com/license)。
 
 直接运行 03，无需再填写权重路径或哈希，也不需要启动参数；按需修改 `WEIGHTS` /
-`DEVICE` / `TABLE_ROI`。默认权重路径相对于仓库定位，也可填写绝对 Path。示例自动计算
+`DEVICE` / `CONFIDENCE` / `TABLE_ROI`。默认权重路径相对于仓库定位，也可填写绝对 Path。
+示例自动计算
 所选文件的 SHA256，供节点记录并复核同一文件；更换文件后的自算哈希不构成来源认证。
 文件不存在或不是 `.pt` 时，先提示实际路径，不连接 Router 或自动下载权重。
 本机已用指定 Python 的 Ultralytics 8.4.24 / Torch 2.9.0+cu128 完成实际 CPU 单图推理，
@@ -249,53 +292,53 @@ Ultralytics YOLO26n 检测权重，并在脚本顶部附上
 
 播报由 Agent 的 Runtime 调度；Router 只负责通信，TTS 只负责执行 speak。
 旧版目录缺少 Agent 启动入口，会在 `system.start()` 报 `node_unavailable`，现已补齐。
-原 `05_start_tts.py` 改名为 `04_start_tts.py`，原 `04_announce.py` 改为
-`06_speak_objects.py`（播报识别到的物体），中间增加 `05_start_agent.py`。
-完整顺序如下，常驻节点各开一个终端、保持运行；02 预览可选，06 只提交一次任务：
+示例按提供数据/执行服务、提交任务、查看结果排序；读帧与 YOLO 联合预览放在最后。
+完整顺序如下，常驻节点各开一个终端、保持运行；05 只提交一次任务，06 预览可选：
 
 | 顺序 | 文件 | 作用 |
 |---|---|---|
 | 00 | `00_start_router.py` | 启动通信服务 |
 | 01 | `01_start_camera.py` | 持续提供 RGB/深度/XYZ |
-| 02（可选） | `02_read_frame.py` | OpenCV 预览，不参与 YOLO 数据传输 |
-| 03 | `03_start_yolo.py` | 持续获取相机新帧并检测 |
-| 04 | `04_start_tts.py` | 启动语音执行节点，默认 Mock 无声 |
-| 05 | `05_start_agent.py` | 调度检测描述→TTS，默认无在线模型 |
-| 06 | `06_speak_objects.py` | 播报一次识别结果 |
+| 02 | `02_start_yolo.py` | 持续获取相机新帧并检测 |
+| 03 | `03_start_tts.py` | 启动语音执行节点，按 BACKEND 选择后端 |
+| 04 | `04_start_agent.py` | 调度检测描述→TTS，默认无在线模型 |
+| 05 | `05_speak_objects.py` | 播报一次识别结果 |
+| 06（可选） | `06_read_frame.py` | 同时读取 RGB 和 YOLO 结果，独立预览 |
 
 在已启动 00、01 的基础上，用各终端配置好的 `$py` 继续：
 
 ```powershell
-python -m examples.camera.03_start_yolo
-& $py -X utf8 -S scripts/run.py examples/camera/04_start_tts.py
-& $py -X utf8 -S scripts/run.py examples/camera/05_start_agent.py
-& $py -X utf8 -S scripts/run.py examples/camera/06_speak_objects.py
+python -m examples.camera.02_start_yolo
+& $py -X utf8 -S scripts/run.py examples/camera/03_start_tts.py
+& $py -X utf8 -S scripts/run.py examples/camera/04_start_agent.py
+& $py -X utf8 -S scripts/run.py examples/camera/05_speak_objects.py
+& $py -X utf8 -S scripts/run.py examples/camera/06_read_frame.py
 ```
 
-06 提交前等待 Agent、YOLO、TTS；缺少节点会明确提示对应的启动文件，并提醒检查
-ENDPOINT/ENV_ID/SESSION。05 默认 `LIVE_MODEL=False`，固定步骤无需大模型或 API Key。
-若已有 WRS/voice 环境提供同一 Agent，复用即可，不再运行 05；使用
-`examples/wrs/05_start_node.py` 时它已启动 Router 和 Agent，可替代本组的 00、05。
+05 提交前等待 Agent、YOLO、TTS；缺少节点会明确提示对应的启动文件，并提醒检查
+ENDPOINT/ENV_ID/SESSION。04 默认 `LIVE_MODEL=False`，固定步骤无需大模型或 API Key。
+若已有 WRS/voice 环境提供同一 Agent，复用即可，不再运行 04；使用
+`examples/wrs/05_start_node.py` 时它已启动 Router 和 Agent，可替代本组的 00、04。
 
 YOLO 节点可以先启动，模型加载并注册后会反复查找相机；没有帧时保持不可用状态。
-持续检测需要 01 一直运行，但不依赖 02 窗口。相机断开或帧过期时，观测循环清除当前
+持续检测需要 01 一直运行，但不依赖 06 窗口。相机断开或帧过期时，观测循环清除当前
 检测结果并置 `camera_or_detection_unavailable`，继续重试；相机恢复后继续读取新帧。
 `describe_objects` 对新鲜结果最多等待约 5 秒，仍无结果就失败，后续 speak 不执行。
 这不会把无帧解释成“没有物体”，也不会用失效结果播报。YOLO 默认最多 5 次推理/秒，
 读取最新帧，允许跳过相机中间帧。
 
-`04_start_tts` 默认 Mock 无声。真实播放需先按 [Qwen 语音说明](QWEN_SPEECH.md) 准备环境，
-停止 Mock TTS，将 `04_start_tts.py` 顶部改为 `BACKEND = "qwen"`，再执行：
+`03_start_tts` 按顶部 BACKEND 选择后端（保留当前 qwen 配置，Mock 可设为 "mock"）。
+真实播放需先按 [Qwen 语音说明](QWEN_SPEECH.md) 准备环境，再执行：
 
 ```powershell
-& .local/venvs/qwen-tts/Scripts/python.exe -m examples.camera.04_start_tts
+& .local/venvs/qwen-tts/Scripts/python.exe -m examples.camera.03_start_tts
 ```
 
 也可接入已有 voice 环境：将相机/YOLO/读帧/播报例子的顶部配置改为
 `ENDPOINT = "tcp/127.0.0.1:7451"`、`ENV_ID = "voice-goal"`、`SESSION = "voice"`。
-该环境已有 Router、TTS 和 Agent，无需再运行相机的 00/04/05；现有 voice viewer 也带
-相机面板。将 06 顶部改为 `GOAL = "播报相机看到的物体"` 可走既有 Planner；必须由
-Agent 启动时显式启用 live_model（05 的 LIVE_MODEL=True）。默认 GOAL="" 使用固定
+该环境已有 Router、TTS 和 Agent，无需再运行相机的 00/03/04；现有 voice viewer 也带
+相机面板。将 05 顶部改为 `GOAL = "播报相机看到的物体"` 可走既有 Planner；必须由
+Agent 启动时显式启用 live_model（独立模式 04 的 LIVE_MODEL=True）。默认 GOAL="" 使用固定
 步骤，不调用模型。
 
 ## 验证边界

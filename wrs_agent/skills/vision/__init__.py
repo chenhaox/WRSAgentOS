@@ -70,7 +70,7 @@ DESCRIBE = Skill(
     description="Describe detected objects in a fresh camera observation; return text for speech.",
     instructions="To announce what is visible, include this skill as a plan step, then a speak "
                  "step with inputs.text referencing this step's output field text and depends_on "
-                 "naming this step. Submit the plan through propose_plan, not a direct skill call. "
+                 "naming this step. Use the configured decision format, not a direct skill call. "
                  "Do not invent an object list. "
                  "Scope is the image or configured table region, without 3D support verification.",
     verification="description_bound_to_observation",

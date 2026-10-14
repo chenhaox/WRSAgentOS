@@ -1,4 +1,4 @@
-"""独立 YOLO26 节点：先运行 voice/07 和 camera/01；02 预览可选。"""
+"""独立 YOLO26 节点：先运行 voice/07 和 camera/01；06 联合预览可选。"""
 
 import asyncio
 import hashlib
@@ -12,7 +12,7 @@ ENDPOINT = "tcp/127.0.0.1:7451"
 ENV_ID = "voice-goal"
 SESSION = "voice"
 # 与 01 的三项连接配置保持一致。
-# voice/07 已有 Router/Agent/TTS，不再启动本目录 00、04、05。
+# voice/07 已有 Router/Agent/TTS，不再启动本目录 00、03、04。
 
 # Ultralytics YOLO26n 检测权重，官方 GitHub 下载：
 # https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt
@@ -20,6 +20,7 @@ SESSION = "voice"
 # 使用已下载到本地的文件；路径相对于仓库，不受启动目录影响。
 WEIGHTS = Path(__file__).resolve().parents[2] / ".local/models/yolo/yolo26n.pt"
 DEVICE = "cpu"
+CONFIDENCE = 0.35  # 检测置信度阈值（0 < 值 <= 1）；调高减少低分检测，修改后重启本节点。
 TABLE_ROI = None  # 可改为 [0.1, 0.2, 0.9, 0.9]，表示归一化的桌面区域 x1/y1/x2/y2。
 
 
@@ -30,11 +31,12 @@ async def main():
     with WEIGHTS.open("rb") as source:
         checksum = hashlib.file_digest(source, "sha256").hexdigest()
     use_local_token(SESSION)
-    print(f"YOLO 连接：{ENDPOINT}，环境 {ENV_ID}，会话 {SESSION}。", flush=True)
+    print(f"YOLO 连接：{ENDPOINT}，环境 {ENV_ID}，会话 {SESSION}，"
+          f"置信度阈值 {CONFIDENCE}。", flush=True)
     await serve_node(
         YoloNode, node_id="yolo", endpoint=ENDPOINT, env_id=ENV_ID,
         options={"weights": WEIGHTS, "weights_sha256": checksum,
-                 "device": DEVICE, "table_roi": TABLE_ROI},
+                 "device": DEVICE, "confidence": CONFIDENCE, "table_roi": TABLE_ROI},
     )
 
 

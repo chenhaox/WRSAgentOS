@@ -11,6 +11,8 @@ from wrs_agent.planner.providers.wire import (
     TOOL_NAME,
     LLMError,
     answer_text,
+    decision_schema,
+    json_prompt,
     tool_schema,
     user_content,
     with_extra,
@@ -25,6 +27,12 @@ def headers(key: str) -> dict:
 
 
 def request_body(request: ModelRequest, config) -> dict:
+    json_mode = config.output_mode != "tools"
+    schema = decision_schema(request) if config.output_mode == "json_schema" else None
+    # Even when absent in a mode, these fields belong to the adapter. Vendor extras may
+    # not silently change which response channel is interpreted as a plan.
+    if {"tools", "tool_choice", "response_format"} & config.extra_body.keys():
+        raise LLMError("llm_extra_body_conflict")
     body = {
         "model": config.model,
         "stream": False,
@@ -32,10 +40,18 @@ def request_body(request: ModelRequest, config) -> dict:
         # openai_responses, and every other Chat Completions server reads max_tokens.
         "max_tokens": config.max_tokens,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": json_prompt(schema) if json_mode else SYSTEM_PROMPT},
             {"role": "user", "content": user_content(request)},
         ],
-        "tools": [
+    }
+    if json_mode:
+        body["response_format"] = (
+            {"type": "json_schema", "json_schema": {
+                "name": "plan_decision", "strict": True, "schema": schema,
+            }} if schema is not None else {"type": "json_object"}
+        )
+    else:
+        body["tools"] = [
             {
                 "type": "function",
                 "function": {
@@ -44,21 +60,20 @@ def request_body(request: ModelRequest, config) -> dict:
                     "parameters": tool_schema(),
                 },
             }
-        ],
+        ]
         # There is exactly one offered tool. Qwen does not reliably enforce "required";
         # select that function explicitly. Auto stays available for other servers.
-        "tool_choice": (
+        body["tool_choice"] = (
             {"type": "function", "function": {"name": TOOL_NAME}}
             if config.tool_choice == "required" else "auto"
-        ),
-    }
+        )
     if config.reasoning_effort is not None:
         # Omitted when unset: servers that predate the field reject it outright.
         body["reasoning_effort"] = config.reasoning_effort
     return with_extra(body, config.extra_body)
 
 
-def parse_reply(data: bytes) -> ModelReply:
+def parse_reply(data: bytes, config=None) -> ModelReply:
     """Decode the native protocol; ModelPlanner validates the proposed decision."""
     try:
         body = decode(data)
@@ -84,7 +99,13 @@ def parse_reply(data: bytes) -> ModelReply:
             return ModelReply("", "incomplete", usage, metadata)
         # Some servers report finish_reason "stop" even when they return a tool call.
         calls = message.get("tool_calls") or []
-        if calls:
+        if config is not None and config.output_mode != "tools":
+            if calls:
+                raise LLMError("llm_unexpected_tool")
+            if finish != "stop" or not isinstance(message.get("content"), str):
+                raise ValueError("json_content_required")
+            text = message["content"]  # Full PlanDecision validation still happens once.
+        elif calls:
             if not isinstance(calls, list) or len(calls) != 1:
                 raise ValueError("one_tool_required")
             call = calls[0]

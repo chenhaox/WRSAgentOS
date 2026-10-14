@@ -28,8 +28,11 @@ PROTOCOLS = {
 }
 
 
-@pytest.mark.parametrize("protocol", PROTOCOLS)
-async def test_model_plan_runs_on_remote_mock_nodes(protocol):
+@pytest.mark.parametrize("protocol,output_mode", [
+    *[(protocol, "tools") for protocol in PROTOCOLS],
+    ("openai_chat", "json_object"), ("openai_chat", "json_schema"),
+])
+async def test_model_plan_runs_on_remote_mock_nodes(protocol, output_mode):
     fixture, user_content = PROTOCOLS[protocol]
     async with LocalStack(bindings="tests/fixtures/actions.toml", duration=0.03) as stack:
 
@@ -41,10 +44,17 @@ async def test_model_plan_runs_on_remote_mock_nodes(protocol):
             assert packages.pop("speak") == "name: speech"
             assert packages and set(packages.values()) == {"name: robot"}
             assert all("node" not in skill for skill in context["skills"])
-            return httpx.Response(200, content=(FIXTURES / fixture).read_bytes())
+            body = json.loads((FIXTURES / fixture).read_text(encoding="utf-8"))
+            if output_mode != "tools":
+                assert json.loads(request.content)["response_format"]["type"] == output_mode
+                arguments = body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+                body["choices"][0].update(
+                    message={"role": "assistant", "content": arguments}, finish_reason="stop",
+                )
+            return httpx.Response(200, json=body)
 
         client = LLMClient(
-            CONFIG.model_copy(update={"protocol": protocol}),
+            CONFIG.model_copy(update={"protocol": protocol, "output_mode": output_mode}),
             transport=httpx.MockTransport(reply),
         )
         nodes = {
@@ -154,12 +164,15 @@ async def test_pending_model_does_not_block_queries_or_control():
             await client.aclose()
 
 
-@pytest.mark.parametrize("fault", ["partial", "authority", "cycle"])
-async def test_invalid_model_proposal_never_reaches_action_nodes(fault):
+@pytest.mark.parametrize("fault", ["partial", "authority", "cycle", "direct_skill"])
+@pytest.mark.parametrize("output_mode", ["tools", "json_object", "json_schema"])
+async def test_invalid_model_proposal_never_reaches_action_nodes(fault, output_mode):
     body = json.loads(FIXTURE.read_text(encoding="utf-8"))
     function = body["choices"][0]["message"]["tool_calls"][0]["function"]
     if fault == "partial":
         function["arguments"] = '{"kind":"execute","plan":'
+    elif fault == "direct_skill":
+        function.update(name="describe_objects", arguments="{}")
     else:
         proposal = json.loads(function["arguments"])
         if fault == "authority":
@@ -167,9 +180,13 @@ async def test_invalid_model_proposal_never_reaches_action_nodes(fault):
         else:
             proposal["plan"]["steps"][0]["depends_on"] = ["verify"]
         function["arguments"] = json.dumps(proposal)
+    if output_mode != "tools" and fault != "direct_skill":
+        body["choices"][0].update(
+            message={"role": "assistant", "content": function["arguments"]}, finish_reason="stop",
+        )
     async with LocalStack(bindings="tests/fixtures/actions.toml", duration=0.01) as stack:
         model = LLMClient(
-            CONFIG,
+            CONFIG.model_copy(update={"output_mode": output_mode}),
             transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body)),
         )
         nodes = {
@@ -185,6 +202,13 @@ async def test_invalid_model_proposal_never_reaches_action_nodes(fault):
             result = await eventually(runtime.snapshot, lambda s: s["planning"] == "FAILED")
             assert result["state"] == "FAILED" and result["task_id"] is None
             assert result["active_actions"] == {} and result["action_history"] == []
+            expected = {
+                "partial": "llm_plan_json_invalid", "direct_skill": "llm_unexpected_tool",
+                "authority": "llm_plan_invalid", "cycle": "llm_plan_invalid",
+            }[fault]
+            assert result["planning_error"]["code"] == expected
+            remote = await stack.system.clients["wrs"].transport.request("request/task/status", {})
+            assert remote["planning_error"] == result["planning_error"]
             for node in nodes.values():
                 assert (await node.transport.request("request/health", {}))["executions"] == 0
         finally:

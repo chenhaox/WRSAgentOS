@@ -7,6 +7,8 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Literal
 
+from pydantic import ValidationError
+
 from wrs_agent.cache import PlanCache
 from wrs_agent.errors import AgentError, error_info, from_exception
 from wrs_agent.nodes.action_rpc import ActionProvider
@@ -417,7 +419,16 @@ class Runtime:
             called = time.perf_counter()
             if cached is None:
                 self.planner_calls += 1
-                decision = await self.planner.plan(request)
+                try:
+                    decision = await self.planner.plan(request)
+                except ValidationError as exc:
+                    errors = exc.errors(
+                        include_input=False, include_context=False, include_url=False,
+                    )
+                    code = "llm_plan_json_invalid" if any(
+                        item["type"] == "json_invalid" for item in errors
+                    ) else "llm_plan_invalid"
+                    raise AgentError(code, stage="planning") from None
                 usage = token_counts(getattr(self.planner, "last_usage", None) or {})
             else:
                 decision = PlanDecision(kind="execute", plan=cached)

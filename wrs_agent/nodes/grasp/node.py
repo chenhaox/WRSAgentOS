@@ -11,11 +11,11 @@ from pydantic import Field
 
 from wrs_agent.errors import AgentError
 from wrs_agent.executor import ActionExecutor, SkillFailure
-from wrs_agent.nodes.grasp.data import GraspData, GraspSet, pack_grasps
+from wrs_agent.nodes.grasp.data import GraspData, GraspSet, LatestGrasps, pack_grasps
 from wrs_agent.nodes.node import Node
 from wrs_agent.nodes.segmentation.data import SegmentInfo, read_segment
 from wrs_agent.nodes.vision.artifacts import ArtifactCache, ArtifactRequest, artifact_owner
-from wrs_agent.schemas import Boundary, Name, VisionData, new_id
+from wrs_agent.schemas import Boundary, Empty, Name, VisionData, new_id
 from wrs_agent.skills.vision.grasping import INFER_GRASPS, GraspsOutput
 
 
@@ -56,6 +56,7 @@ class GraspNetNode(Node):
         self.loop = asyncio.get_running_loop()
         self.predictor = await self.loop.run_in_executor(self.worker, self._predictor)
         self.cache = ArtifactCache()
+        self.latest_request = None
         self.actions(ActionExecutor(
             self.journal, state=GraspState(), skills=(INFER_GRASPS.bind(self.infer),),
             backend="graspnet", features_extra={"robot_controls": False, "controller_flush": False,
@@ -63,6 +64,7 @@ class GraspNetNode(Node):
                                               "stop_scope": "grasp_proposals"},
         ))
         self.transport.register_handler("request/grasp/data", self.read, binary=True)
+        self.transport.register_handler("request/grasp/latest", self.latest)
         self.discover()
         self.spawn(self._expire())
 
@@ -83,6 +85,7 @@ class GraspNetNode(Node):
             raise AgentError("segment_changed")
 
     async def infer(self, state, args, stop, progress):
+        self.latest_request = None  # A new attempt must not display an older task's proposals.
         owner = artifact_owner(self.executor)
         try:
             await self.registry.refresh([self.options.segmentation])
@@ -110,9 +113,26 @@ class GraspNetNode(Node):
         except (AgentError, ValueError, TimeoutError) as exc:
             raise SkillFailure(str(exc)[:200]) from exc
         state.completed += 1
+        self.latest_request = ArtifactRequest(artifact_id=data.info.candidate_set_id,
+                                             task_id=owner.task_id)
         return GraspsOutput(candidate_set_id=data.info.candidate_set_id,
                             observation_id=segment.info.observation.observation_id,
                             count=len(candidates))
+
+    async def latest(self, payload):
+        Empty.model_validate(payload)
+        request = self.latest_request
+        if request is None:
+            raise AgentError("grasp_not_available")
+        data, _ = self.cache.get(request, self.executor)
+        await self._check_segment(data.segment.info)
+        data, age = self.cache.get(request, self.executor)
+        if request != self.latest_request:
+            raise AgentError("grasp_changed")
+        return LatestGrasps(candidate_set_id=data.info.candidate_set_id,
+                            task_id=data.info.owner.task_id,
+                            observation_id=data.info.segment.observation.observation_id,
+                            age_s=age).model_dump()
 
     async def read(self, payload):
         request = ArtifactRequest.model_validate(payload)

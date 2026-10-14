@@ -15,19 +15,20 @@ from wrs_agent.schemas import ErrorInfo  # noqa: E402
 _MESSAGES = {
     "llm_invalid_reply": (
         "模型返回的格式不符合所选协议；未创建任务。"
-        "请检查 LLM_PROTOCOL，并确认模型通过 propose_plan 返回单个完整计划。"
+        "请检查 LLM_PROTOCOL 和 LLM_OUTPUT_MODE，确认回复符合所选返回格式。"
     ),
     "llm_unexpected_tool": (
         "模型调用了未提供的工具；未创建任务。"
-        "模型只能调用 propose_plan，describe_objects、speak 等技能须写在 plan.steps 中。"
+        "工具模式只接受 propose_plan，JSON 模式不接受工具调用；技能须写在 plan.steps 中。"
     ),
     "llm_plan_json_invalid": (
-        "模型的 propose_plan 参数不是完整合法的 JSON；未创建任务。"
-        "请使用支持结构化工具调用的模型，参数中不能包含代码围栏或说明文字。"
+        "模型返回的计划不是完整合法的 JSON；未创建任务。"
+        "请检查模型的输出约束；支持严格结构输出的 Chat 模型可配置 "
+        "LLM_OUTPUT_MODE=json_schema，参见语音示例说明。"
     ),
     "llm_plan_invalid": (
         "模型提案不符合计划结构；未创建任务。"
-        "请按 propose_plan 的结构填写 kind、plan.steps、depends_on 和 inputs。"
+        "请按计划结构填写 kind、plan.steps、depends_on 和 inputs。"
     ),
     "llm_model_missing": (
         "请把 LLM_MODEL 设为账号上已开通的模型 ID；LLM_API_KEY 与 LLM_BASE_URL 不会选择模型。"
@@ -53,6 +54,11 @@ _MESSAGES = {
         "留空则由服务端默认。具体模型接受哪些取值以厂商文档为准。"
     ),
     "llm_tool_choice_invalid": "LLM_TOOL_CHOICE 应为 auto 或 required；留空为 auto。",
+    "llm_output_mode_invalid": (
+        "LLM_OUTPUT_MODE 应为 tools（默认）、json_object 或 json_schema；"
+        "两种 JSON 模式仅支持 openai_chat，模型服务须支持所选的输出约束。"
+    ),
+    "llm_schema_unsupported": "计划 Schema 含无法转换的字典约束；请检查模型适配器。",
     "llm_max_tokens_invalid": "LLM_MAX_TOKENS 应为 128 到 65536 之间的整数。",
     "llm_timeout_s_invalid": "LLM_TIMEOUT_S 应为大于 0、不超过 300 的秒数。",
     "llm_extra_body_invalid": "LLM_EXTRA_BODY 应为不超过 4096 字节的 JSON 对象。",
@@ -71,8 +77,8 @@ _MESSAGES = {
     ),
     "llm_http_400": (
         "模型服务拒绝了请求参数。常见原因：该模型不支持所设 LLM_REASONING_EFFORT、"
-        "LLM_TOOL_CHOICE=required、LLM_EXTRA_BODY 中的字段或 LLM_MAX_TOKENS；"
-        "可先清空这些项再试。"
+        "LLM_OUTPUT_MODE、LLM_TOOL_CHOICE=required、LLM_EXTRA_BODY 中的字段或 LLM_MAX_TOKENS；"
+        "请按该模型支持的参数检查配置。"
     ),
     "llm_http_401": "模型服务拒绝了凭据。请检查 LLM_API_KEY 与 LLM_BASE_URL 是否属于同一服务。",
     "llm_http_404": "模型服务找不到该路径或模型。请检查 LLM_BASE_URL、LLM_PROTOCOL 与 LLM_MODEL。",

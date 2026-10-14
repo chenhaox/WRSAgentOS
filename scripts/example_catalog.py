@@ -38,7 +38,7 @@ PAIRED = {
     "nodes/04_task.py",
     "nodes/05_cancel.py",
     "camera/00_start_router.py", "camera/01_start_camera.py",
-    "camera/05_start_agent.py", "camera/06_speak_objects.py",
+    "camera/04_start_agent.py", "camera/05_speak_objects.py",
 }
 # Explicit audio/model or interactive examples; never run by the default verifier.
 LIVE = {
@@ -57,7 +57,7 @@ LIVE = {
     "nodes/10_live_announce.py",
     "nodes/11_voice_grasp.py",
     "tts/01_start_node.py", "tts/02_speak.py", "tts/03_cancel.py",
-    "camera/02_read_frame.py", "camera/03_start_yolo.py", "camera/04_start_tts.py",
+    "camera/06_read_frame.py", "camera/02_start_yolo.py", "camera/03_start_tts.py",
 }
 SUPPORT = {"nodes/greet_skill.py", "voice/commands.py", "_session.py"}
 

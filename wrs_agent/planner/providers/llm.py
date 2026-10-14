@@ -48,7 +48,7 @@ RESERVED_HEADERS = {
 }
 USER_AGENT = "WRS-Agent/0.1.0"
 ENV_FIELDS = (
-    "protocol", "base_url", "model", "reasoning_effort", "tool_choice", "max_tokens",
+    "protocol", "base_url", "model", "reasoning_effort", "tool_choice", "output_mode", "max_tokens",
     "timeout_s", "extra_body", "extra_headers", "proxy",
 )
 
@@ -86,8 +86,10 @@ class LLMConfig(Boundary):
     # quality for latency; Runtime still validates every plan before execution.
     reasoning_effort: ReasoningEffort | None = None
     # Under auto some models write the plan as message text, which is only ever an answer;
-    # required keeps every reply in propose_plan. GLM documents auto as its only value.
+    # required requests propose_plan. Neither value guarantees syntactically valid arguments.
     tool_choice: Literal["auto", "required"] = "auto"
+    # Only an explicit JSON mode lets message content carry a proposed decision.
+    output_mode: Literal["tools", "json_object", "json_schema"] = "tools"
     max_tokens: int = Field(default=2048, ge=128, le=65536)
     timeout_s: float = Field(default=20.0, gt=0, le=300)
     # Vendor-specific request fields, e.g. GLM's thinking switch or vLLM template flags.
@@ -95,6 +97,13 @@ class LLMConfig(Boundary):
     extra_headers: dict[str, str] = Field(default_factory=dict)
     # Explicit only: environment proxy variables never silently carry robot planning.
     proxy: str | None = Field(default=None, max_length=512)
+
+    @field_validator("output_mode")
+    @classmethod
+    def _output_mode(cls, value, info):
+        if value != "tools" and info.data.get("protocol") != "openai_chat":
+            raise ValueError("json_mode_requires_openai_chat")
+        return value
 
     @field_validator("base_url")
     @classmethod
@@ -151,7 +160,7 @@ class LLMConfig(Boundary):
                     values[name] = float(text)
                 elif name in {"extra_body", "extra_headers"}:
                     values[name] = json.loads(text)
-                elif name in {"protocol", "reasoning_effort", "tool_choice"}:
+                elif name in {"protocol", "reasoning_effort", "tool_choice", "output_mode"}:
                     values[name] = text.lower()
                 else:
                     values[name] = text
@@ -242,7 +251,9 @@ class LLMClient:
                             raise LLMError("llm_reply_too_large")
                         data.extend(chunk)
             received = time.perf_counter()
-            reply = self.wire.parse_reply(bytes(data))  # An empty body fails, so first_byte is set.
+            # An empty body fails, so first_byte is set. Parsing uses the requested mode;
+            # model content never chooses its own interpretation.
+            reply = self.wire.parse_reply(bytes(data), self.config)
             done = time.perf_counter()
             timing = ModelTiming(
                 total=done - started,

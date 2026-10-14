@@ -1,4 +1,4 @@
-"""启动独立 TTS；默认 Mock 无声，准备好 qwen 环境后切换后端即可播放。"""
+"""启动独立 TTS；按顶部 BACKEND 选择后端，qwen 需要已准备好的语音环境。"""
 
 import asyncio
 

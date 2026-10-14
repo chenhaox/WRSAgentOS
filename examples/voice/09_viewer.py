@@ -14,6 +14,7 @@ from wrs_agent.schemas import TERMINAL, TextInput, new_id
 
 CONFIG = Path(__file__).with_name("wrs_bindings.toml")
 VIEWER_PORT = 8001
+GRASP_NODE = "graspnet"  # 只读同一 voice-goal 环境的结果；查看不会触发推理。
 # 这些判定自带正文：ANSWER 是模型的回答，其余是澄清或失败原因。
 # DONE/IDLE 的 reason 可能来自上一次任务，不能当成本次回复。
 REPLIED = {"ANSWER", "CLARIFY", "FAILED", "STALE", "REQUIRES_CONFIRMATION"}
@@ -279,7 +280,10 @@ if __name__ == "__main__":
             done = "；".join(f"{name}={state}" for name, state in overview["steps"].items())
             plan_panel.set_value("steps", f"执行中 {active}｜{done}" if active else done or "无")
             fault = overview.get("planning_error") if verdict == "FAILED" else None
-            plan_panel.set_value("fault", describe_fault(fault or overview["error"]))
+            fault_text = describe_fault(fault or overview["error"])
+            if verdict == "FAILED" and "planning_error" not in overview:
+                fault_text = "Agent 未提供规划错误详情；请重启 07_start_llm_voice.py 加载新代码。"
+            plan_panel.set_value("fault", fault_text)
             plan_panel.set_value(
                 "calls",
                 f"模型 {overview['planner_calls']} 次"
@@ -320,6 +324,7 @@ if __name__ == "__main__":
             # 这个帮助函数只管理页面服务，场景和刷新逻辑都在本文件。
             with viewer_hub(VIEWER_PORT, camera={
                 "endpoint": "tcp/127.0.0.1:7451", "env_id": "voice-goal",
+                "grasp_node_id": GRASP_NODE,
             }):
                 print(f"打开 http://127.0.0.1:{VIEWER_PORT}，Ctrl+C 退出观察。", flush=True)
                 print("按住“按住说话”说“向前移动”；说“停止”会立即走控制通道。", flush=True)

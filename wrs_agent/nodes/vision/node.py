@@ -6,12 +6,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 
 from pydantic import Field, model_validator
 
 from wrs_agent.errors import AgentError
 from wrs_agent.executor import ActionExecutor, SkillFailure
 from wrs_agent.nodes.camera.client import CameraClient
+from wrs_agent.nodes.camera.frames import pack_frame
 from wrs_agent.nodes.node import Node
 from wrs_agent.nodes.vision.artifacts import ArtifactCache, ArtifactRequest, artifact_owner
 from wrs_agent.nodes.vision.locations import (
@@ -91,6 +93,7 @@ class YoloNode(Node):
     async def setup(self):
         self.state = VisionState()
         self.results = {}
+        self.frames = {}  # At most two RGB-only inference frames; never retain depth/points.
         self.locations = ArtifactCache()
         self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="yolo")
         self.on_close(self._close_worker)
@@ -111,12 +114,35 @@ class YoloNode(Node):
                                         "stop_scope": "vision_results",
                                     }))
         self.transport.register_handler("request/vision/result", self.result)
+        self.transport.register_handler("request/vision/frame", self.result_frame, binary=True)
         self.transport.register_handler("request/vision/location", self.location, binary=True)
         self.discover()
         self.spawn(self._observe())
 
     async def _close_worker(self):
         await asyncio.to_thread(self.worker.shutdown, wait=True, cancel_futures=True)
+        self.frames.clear()
+
+    def retain_frame(self, result_id, info, rgb, observed_at):
+        # A camera restart must not leave images from the preceding stream readable.
+        self.frames = {key: value for key, value in self.frames.items()
+                       if value[0].stream_id == info.stream_id
+                       and time.monotonic() - value[2] < 2.0}
+        self.frames[result_id] = (info, SimpleNamespace(rgb=rgb), observed_at)
+        while len(self.frames) > 2:
+            del self.frames[next(iter(self.frames))]
+
+    async def result_frame(self, payload):
+        request = ResultRequest.model_validate(payload)
+        data = self.frames.get(request.result_id)
+        if self.state.health != "ready" or data is None:
+            raise AgentError("vision_result_expired")
+        info, frame, observed_at = data
+        age = time.monotonic() - observed_at
+        if age >= 2.0:
+            self.frames.pop(request.result_id, None)
+            raise AgentError("vision_result_expired")
+        return await asyncio.to_thread(pack_frame, info, frame, ["rgb"], age)
 
     async def result(self, payload):
         request = ResultRequest.model_validate(payload)
@@ -168,6 +194,8 @@ class YoloNode(Node):
         while True:
             began = time.monotonic()
             self.locations.expire()
+            self.frames = {key: value for key, value in self.frames.items()
+                           if began - value[2] < 2.0}
             try:
                 await self.registry.refresh([self.options.camera])
                 client = CameraClient(self.connect(self.options.camera))
@@ -190,11 +218,13 @@ class YoloNode(Node):
                     self.state.observed_at = observed_at
                     self.state.health = "ready"
                     self.results[result.result_id] = result
+                    self.retain_frame(result.result_id, info, arrays["rgb"], observed_at)
                     while len(self.results) > 8:
                         del self.results[next(iter(self.results))]
                     self.transport.publish("stream/vision/objects", result.model_dump())
                     previous = info.observation_id
             except (AgentError, TimeoutError, ValueError):
+                self.frames.clear()
                 self.state.latest = None
                 self.state.health = "camera_or_detection_unavailable"
             await asyncio.sleep(max(0.01, 1 / self.options.max_hz - (time.monotonic() - began)))

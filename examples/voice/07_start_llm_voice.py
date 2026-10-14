@@ -21,6 +21,11 @@ async def main():
     except LLMError as exc:
         raise SystemExit(f"模型配置错误：{exc.error.message}") from None
     await validation.aclose()
+    print(
+        f"模型配置：{config.model}｜{config.protocol}｜output_mode={config.output_mode}"
+        + (f"｜tool_choice={config.tool_choice}" if config.output_mode == "tools" else ""),
+        flush=True,
+    )
     print("加载 WRS、Qwen TTS 与 ASR，首次加载模型需要数十秒，启动后会播放提示。", flush=True)
     async with LocalStack(
         backend="wrs", bindings=CONFIG, duration=4.0,

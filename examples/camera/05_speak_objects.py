@@ -1,4 +1,4 @@
-"""播报识别到的物体：先启动 00、01、03、04、05；02 预览可选。"""
+"""播报识别到的物体：同一环境先启动 00 至 04；06 联合预览可选。"""
 
 import asyncio
 
@@ -14,8 +14,8 @@ GOAL = ""  # 留空使用下方固定步骤；填写目标时，需要已有 Age
 async def main():
     use_local_token(SESSION)
     async with System.connect(ENDPOINT, env_id=ENV_ID) as system:
-        for node, script in (("agent", "05_start_agent.py"), ("yolo", "03_start_yolo.py"),
-                             ("tts", "04_start_tts.py")):
+        for node, script in (("agent", "04_start_agent.py"), ("yolo", "02_start_yolo.py"),
+                             ("tts", "03_start_tts.py")):
             try:
                 await system.registry.wait_for(node, timeout=5)
             except TimeoutError:

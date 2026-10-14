@@ -1,9 +1,14 @@
+import asyncio
+import contextlib
 import json
 import struct
 import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import numpy as np
 import pytest
+from conftest import eventually
 
 from wrs_agent.drivers.cameras.synthetic import SyntheticCamera
 from wrs_agent.errors import AgentError
@@ -98,15 +103,91 @@ def test_hardware_requires_opt_in_but_allows_default_device():
     assert CameraOptions(backend="realsense", allow_hardware=True).serial == ""
 
 
-def test_preview_is_bounded_and_keeps_source_and_coordinate_frame(sample):
+@pytest.mark.parametrize("view,components", [("rgb", ("rgb",)), ("depth", ("depth",)),
+                                            ("points", ("rgb", "points"))])
+def test_preview_is_bounded_and_keeps_source_and_coordinate_frame(sample, view, components):
     info, frame = sample
-    result = make_preview(info, {name: getattr(frame, name) for name in ("rgb", "depth", "points")})
+    result = make_preview(info, {name: getattr(frame, name) for name in components}, view)
     assert result["source"] == "synthetic" and result["frame_id"] == info.frame_id
     assert result["observation_id"] == info.observation_id
-    assert len(result["points"]) <= 2048
-    assert result["rgb"].startswith("data:image/jpeg;base64,")
-    assert result["depth"].startswith("data:image/png;base64,")
+    if view == "points":
+        assert len(result["points"]) <= 8192 and "rgb" not in result and "depth" not in result
+    else:
+        mime = "jpeg" if view == "rgb" else "png"
+        assert result[view].startswith(f"data:image/{mime};base64,")
+        assert "points" not in result
+        assert ("rgb" in result) == (view == "rgb")
+        assert ("depth" in result) == (view == "depth")
     json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize("view,components,rate", [("rgb", ("rgb",), 30),
+                                                 ("points", ("rgb", "points"), 5)])
+async def test_preview_reads_selected_components_once_and_preserves_frame_age(
+    sample, monkeypatch, view, components, rate,
+):
+    from wrs_agent.nodes.camera import preview
+
+    info, frame = sample
+    now = [10.0]
+    monkeypatch.setattr(preview, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    arrays = {name: getattr(frame, name) for name in components}
+    ui = preview.CameraPreview(endpoint="unused", env_id="test")
+    ui.client = SimpleNamespace(read=AsyncMock(return_value=(info, arrays, .2)), status=AsyncMock())
+
+    def encode(*args):
+        now[0] += .01  # Encoding time must not make an old observation appear younger.
+        return make_preview(*args)
+
+    encoder = Mock(side_effect=encode)
+    monkeypatch.setattr(preview, "make_preview", encoder)
+    await ui._update(view)
+    assert ui.observed_at[view] == pytest.approx(9.8)
+    assert ui.next_read[view] == pytest.approx(10 + 1 / rate)
+    now[0] = 10.5
+    ui.client.read.return_value = info, arrays, .7
+    await ui._update(view)
+    assert ui.observed_at[view] == pytest.approx(9.8)
+    assert encoder.call_count == 1
+    assert ui.client.read.await_count == 2
+    ui.client.read.assert_awaited_with(components=components, max_age_s=1.0)
+    ui.client.status.assert_not_awaited()
+
+    ui.client.read.side_effect = TimeoutError
+    await ui._update(view)
+    assert ui.latest[view] == {"state": "offline", "reason": "camera_node_unavailable"}
+
+
+async def test_preview_only_polls_while_a_view_has_recent_requests(sample, monkeypatch):
+    from wrs_agent.nodes.camera import preview
+
+    info, frame = sample
+    now = [10.0]
+    monkeypatch.setattr(preview, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    ui = preview.CameraPreview(endpoint="unused", env_id="test")
+    ui.client = SimpleNamespace(read=AsyncMock(return_value=(info, {"rgb": frame.rgb}, .2)))
+    worker = asyncio.create_task(ui._run())
+    try:
+        await asyncio.sleep(.02)
+        ui.client.read.assert_not_awaited()
+        ui.requested_at["rgb"] = now[0]
+        ui.changed.set()
+        await eventually(lambda: ui.latest,
+                         lambda value: value.get("rgb", {}).get("state") == "ready")
+        assert set(ui.latest) == {"rgb"}
+        # Repeated HTTP requests wake the worker without increasing its polling rate.
+        ui.changed.set()
+        await asyncio.sleep(.02)
+        assert ui.client.read.await_count == 1
+        now[0] += 2
+        ui.changed.set()
+        await eventually(lambda: ui.latest, lambda value: not value)
+        assert not ui.observed_at
+        assert ui.client.read.await_count == 1
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
 
 
 def test_viewer_closes_preview_when_page_binding_fails(monkeypatch):

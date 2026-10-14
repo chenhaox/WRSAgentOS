@@ -55,7 +55,7 @@ def request_body(request: ModelRequest, config) -> dict:
     return with_extra(body, config.extra_body)
 
 
-def parse_reply(data: bytes) -> ModelReply:
+def parse_reply(data: bytes, config=None) -> ModelReply:
     try:
         body = decode(data)
         if body.get("type") != "message" or body.get("role") != "assistant":

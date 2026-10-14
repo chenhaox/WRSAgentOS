@@ -4,24 +4,27 @@
 相机例子的设备、权重与硬件开关也写在文件顶部，不需要命令行参数。
 先读最简单的一份，再按需要看其他文件。
 
-相机与视觉播报见 [运行说明](../docs/CAMERA.md)。当前 camera/01、02、03 已配置为
+相机与视觉播报见 [运行说明](../docs/CAMERA.md)。当前 camera/01、02、06 已配置为
 语音环境 `7451 / voice-goal / voice`：先运行 `voice/07_start_llm_voice.py`，再运行
-相机 01、按需运行 YOLO 03，最后运行 `voice/09_viewer.py`；02 是可选独立预览。
-07 已有 Router、Agent 和 TTS，不额外运行相机的 00、04、05。
+相机 01、按需运行 YOLO 02，最后运行 `voice/09_viewer.py`；06 是可选独立预览。
+07 已有 Router、Agent 和 TTS，不额外运行相机的 00、03、04。
 
-如要使用独立相机模式，先将 01、02、03 的 ENDPOINT/ENV_ID/SESSION 一起改回
-`tcp/127.0.0.1:7449` / `wrs-demo` / `wrs`，再在三个终端依次运行
+如要使用独立相机模式，先将 01、02、06 的 ENDPOINT/ENV_ID/SESSION 一起改回
+`tcp/127.0.0.1:7449` / `wrs-demo` / `wrs`，再分别运行
 [`camera/00_start_router.py`](camera/00_start_router.py) →
-[`01_start_camera.py`](camera/01_start_camera.py) → [`02_read_frame.py`](camera/02_read_frame.py)。
+[`01_start_camera.py`](camera/01_start_camera.py) → [`02_start_yolo.py`](camera/02_start_yolo.py)。
 00 启动本组 Router 并准备共享口令；01 使用顶部 BACKEND 选择相机，
-`02_read_frame.py` 用 OpenCV 显示 RGB 和接收 FPS（Q/Esc 退出），
-`03_start_yolo.py` 加载本地检测模型。需要播报时，继续依次运行
-[`04_start_tts.py`](camera/04_start_tts.py) → [`05_start_agent.py`](camera/05_start_agent.py) →
-[`06_speak_objects.py`](camera/06_speak_objects.py)。04 提供 TTS（默认 Mock 无声），
-05 启动调度固定任务的 Agent（默认不调用大模型），06 把检测描述交给 TTS 播报一次。
-00、01、03、04、05 保持运行，02 只是可选预览，不影响 YOLO。
+02 加载本地检测模型。需要播报时，继续依次运行
+[`03_start_tts.py`](camera/03_start_tts.py) → [`04_start_agent.py`](camera/04_start_agent.py) →
+[`05_speak_objects.py`](camera/05_speak_objects.py)。03 提供 TTS（按 BACKEND 选择），
+04 启动调度固定任务的 Agent（默认不调用大模型），05 把检测描述交给 TTS 播报一次。
+最后可运行 [`06_read_frame.py`](camera/06_read_frame.py)，同时显示 RGB、接收 FPS、
+右侧推理原图上的 YOLO 框/类别/置信度和对应观测编号（Q/Esc 退出）。
+02 顶部 CONFIDENCE 调节检测阈值，默认 0.35；更新后重启 02 和 06。
+00 至 04 保持运行；06 只读取数据，
+不依赖播报任务，也不影响 YOLO；未运行 02 时仍可看 RGB。
 YOLO 可以先于相机启动；无新鲜帧时不产生有效的新检测，断开后清除当前结果并重试。
-如果已用 `wrs/05_start_node.py` 启动了 Router 和 Agent，就不用本组的 00、05。
+如果已用 `wrs/05_start_node.py` 启动了 Router 和 Agent，就不用本组的 00、04。
 使用 D405 时，在 01 顶部设置 `BACKEND = "realsense"`，选择后运行即打开真实相机；
 `SERIAL = ""` 使用默认相机，多台设备时可以填写指定序列号。
 YOLO 只需修改 `WEIGHTS`（本地文件指纹自动计算），真实 TTS 则修改 `BACKEND = "qwen"`。

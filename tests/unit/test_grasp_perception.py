@@ -1,5 +1,6 @@
 import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
@@ -9,8 +10,9 @@ from wrs_agent.drivers.cameras.synthetic import SyntheticCamera
 from wrs_agent.errors import AgentError
 from wrs_agent.executor import ActionExecutor
 from wrs_agent.nodes.camera.frames import Observation
-from wrs_agent.nodes.grasp.data import GraspData, GraspSet, pack_grasps, unpack_grasps
+from wrs_agent.nodes.grasp.data import GraspData, GraspSet, LatestGrasps, pack_grasps, unpack_grasps
 from wrs_agent.nodes.grasp.graspnet import candidates_from_rows, sample_target
+from wrs_agent.nodes.grasp.node import GraspNetNode
 from wrs_agent.nodes.segmentation.data import SegmentData, SegmentInfo, pack_segment, unpack_segment
 from wrs_agent.nodes.segmentation.node import SegmentationState
 from wrs_agent.nodes.segmentation.sam3 import Sam3Segmenter, select_mask
@@ -143,6 +145,87 @@ def test_grasp_packet_preserves_provenance_and_whole_scene(segment):
     data, age = unpack_grasps(pack_grasps(GraspData(info, segment), 1.5))
     assert age == 1.5 and data.info == info and not data.info.collision_checked
     np.testing.assert_array_equal(data.segment.arrays["points"], segment.arrays["points"])
+
+
+@pytest.fixture
+def grasp_data(segment):
+    info = GraspSet(candidate_set_id="grasps", owner=segment.info.owner,
+                    segment=segment.info, model="fixture", weights_sha256="0" * 64,
+                    source_revision="0" * 40,
+                    candidates=candidates_from_rows(rows(), max_width_m=.05))
+    return GraspData(info, segment)
+
+
+async def test_latest_grasp_is_only_a_valid_successful_unexpired_reference(grasp_data):
+    node = object.__new__(GraspNetNode)
+    node.latest_request = None
+    with pytest.raises(AgentError, match="grasp_not_available"):
+        await node.latest({})
+    state = SimpleNamespace(state=ActionState.RUNNING)
+    node.executor = SimpleNamespace(boot_id="boot", epoch=0, status=lambda _: state)
+    node.cache = ArtifactCache()
+    node._check_segment = AsyncMock()
+    node.cache.put("grasps", grasp_data.info.owner, grasp_data, nbytes=1,
+                   observed_at=time.monotonic() - 6)
+    node.latest_request = ArtifactRequest(artifact_id="grasps", task_id="task")
+    with pytest.raises(AgentError, match="invalidated"):
+        await node.latest({})
+    state.state = ActionState.SUCCEEDED
+    ref = LatestGrasps.model_validate(await node.latest({}))
+    assert ref.candidate_set_id == "grasps" and ref.observation_id == "obs.1"
+    assert ref.task_id == "task" and ref.age_s >= 6
+    node._check_segment.assert_awaited_once_with(grasp_data.segment.info)
+
+    async def cancel_during_check(_):
+        node.executor.epoch += 1
+
+    node._check_segment.side_effect = cancel_during_check
+    with pytest.raises(AgentError, match="invalidated"):
+        await node.latest({})
+    node.cache.ttl = 1
+    with pytest.raises(AgentError, match="expired"):
+        await node.latest({})
+
+
+async def test_grasp_preview_uses_inference_frame_once_then_checks_validity(
+    grasp_data, monkeypatch,
+):
+    from wrs_agent.nodes.camera import preview
+
+    ui = preview.CameraPreview(endpoint="unused", env_id="test")
+    ref = LatestGrasps(candidate_set_id="grasps", task_id="task", observation_id="obs.1", age_s=6)
+    ui.grasp_bus = SimpleNamespace(request=AsyncMock(return_value=ref.model_dump()))
+    ui.client = SimpleNamespace(read=AsyncMock(), status=AsyncMock())
+    read = AsyncMock(return_value=(grasp_data, 6.0))
+    monkeypatch.setattr(preview, "read_grasps", read)
+    await ui._update("grasps")
+    result = ui.latest["grasps"]
+    assert result["state"] == "ready" and result["view"] == "grasps"
+    assert result["observation_id"] == "obs.1" and result["task_id"] == "task"
+    assert result["grasps"][0]["translation"] == [0, 0, .25]
+    assert len(result["points"]) == 32 * 24
+    assert time.monotonic() - ui.observed_at["grasps"] >= 6
+    await ui._update("grasps")
+    read.assert_awaited_once_with(ui.grasp_bus, "grasps", "task")
+    assert ui.grasp_bus.request.await_count == 2
+    ui.client.read.assert_not_awaited()
+    ui.grasp_bus.request.side_effect = AgentError("artifact_invalidated")
+    await ui._update("grasps")
+    assert ui.latest["grasps"] == {"state": "unavailable", "reason": "artifact_invalidated"}
+    ui.client.status.assert_not_awaited()
+
+
+async def test_grasp_preview_rejects_mismatched_observation(grasp_data, monkeypatch):
+    from wrs_agent.nodes.camera import preview
+
+    ui = preview.CameraPreview(endpoint="unused", env_id="test")
+    ui.grasp_bus = SimpleNamespace(request=AsyncMock(return_value=dict(
+        candidate_set_id="grasps", task_id="task", observation_id="wrong.1", age_s=0,
+    )))
+    monkeypatch.setattr(preview, "read_grasps", AsyncMock(return_value=(grasp_data, 0)))
+    await ui._update("grasps")
+    assert ui.latest["grasps"]["state"] != "ready"
+    assert "points" not in ui.latest["grasps"]
 
 
 def test_sam_checks_local_weights_before_sdk_import(tmp_path):

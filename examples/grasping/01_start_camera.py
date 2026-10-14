@@ -10,7 +10,7 @@ ENDPOINT = "tcp/127.0.0.1:7449"
 ENV_ID = "wrs-demo"
 SESSION = "wrs"
 SERIAL = ""  # 留空使用默认设备；多台相机时填写 D405 的序列号。
-WIDTH, HEIGHT, FPS = 848, 480, 15
+WIDTH, HEIGHT, FPS = 848, 480, 30  # 模型推理频率独立于相机采集。
 
 
 async def main():

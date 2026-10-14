@@ -1,5 +1,51 @@
 # 依赖与 Git submodule 决策
 
+2026-10-13 用户明确同意非商业研究用途后，已取得 GraspNet 官方 RealSense checkpoint：
+12,468,415 字节，固定 Drive ID 1hd0G8LN6tRpi4742XOTEisbTXNZ-1jmk，模型与许可存于
+.local/models/graspnet。首次本地 SHA256 为
+`60680087c61cba2b6791614fef1519071e294f6dcaf99b3f581bb95f7c51a868`；上游没有公开
+SHA256，此值只固定首次下载内容及后续一致性，不冒称官方哈希。版本、URL、许可来源
+和哈希性质记录于 `wrs_agent/nodes/grasp/assets.json`（加入包资源），下载是独立显式
+入口，节点启动不下载。已用 weights_only=True 加载并完成香蕉点云训练模型推理。
+本次没有增加 SDK 依赖或改变环境版本；权重确认阻塞已解除。
+
+2026-10-13 GraspNet 原生扩展：新增独立 graspnet extra，Torch 2.9.0 CU128、NumPy、
+Ninja 1.13.2、setuptools 84.0.0、wheel 0.48.0；uv 工具生成 152 包锁文件。
+固定基础解释器创建 .local/venvs/graspnet，共享/语音/vision 环境不变。官方源码固定
+280c215129f759ed8649cb4e89fc5dfee55f4f80，位于 .local/src，非 submodule。
+setup_graspnet.ps1 -BuildExtensions 准备本地 CUDA 12.8.1 的 nvcc/cudart/cccl，
+依据 NVIDIA redistrib_12.8.1.json 中的官方大小/SHA256 校验；不安装驱动或修改系统。
+MSVC 14.44 编译独立扩展副本，修正 Windows KNN 索引宽度、头文件/API 和编译参数；
+模型源码保持干净。9 项算子数值检查与随机初始化网络前向通过；训练权重随后完成上节验证。
+GraspNet 官方源码许可限非商业内部研究，构建代码/二进制不进 Git；本地保留 LICENSE。
+具体入口和限制见 [视觉抓取](VISUAL_GRASP.md)。
+
+同帧 RGB-D 检查追加：graspnet extra 显式列入 SciPy 与 Pillow，读取官方 meta.mat
+和 RGB/深度 PNG，不依赖共享解释器碰巧安装的库。uv 重新生成锁仍为 152 包；隔离
+graspnet 环境实际新增 scipy 1.18.1、pillow 12.3.0，vision/语音环境不变。仅处理
+已下载的固定示例文件，没有新增模型或数据下载。
+
+2026-10-13 YOLO26 权重：按用户明确要求下载 Ultralytics assets v8.4.0 的 yolo26n.pt
+到 `.local/models/yolo/`，5,544,453 字节，校验通过 GitHub 官方资产 SHA256
+`9b09cc8bf347f0fc8a5f7657480587f25db09b34bf33b0652110fb03a8ad4fef`。
+许可/下载地址见 [CAMERA.md](CAMERA.md)。02_start_yolo 默认选用该文件，运行时不下载。
+实际使用固定 Python 3.12.0 已安装的 Ultralytics 8.4.24、Torch 2.9.0+cu128 完成 CPU
+单图推理；没有安装或升级任何依赖，不修改 pyproject/uv.lock 或现有 vision 环境。
+
+2026-10-13 OpenCV 预览：camera extra 与 dev 增加 `opencv-python>=4.10,<6`，复用
+原 YOLO 已锁定的 5.0.0.93，由 uv 0.12.15 重新生成真实锁文件（150 包）。
+已按带哈希的导出文件增量安装到项目 `.local/deps`，共享 Python 的 OpenCV 4.10.0 未修改。
+项目 OpenCV 实际报告 5.0.0 / WIN32UI；测试只调用像素转换和绘字，未弹窗、未连接设备。
+
+2026-10-13 后续增加 SAM3/GraspNet 本地适配器，用户尚无模型环境/权重。未自动安装 SDK
+或下载权重；core lockfile 不代表完整模型栈。独立环境及验证边界见
+[VISUAL_GRASP.md](VISUAL_GRASP.md)。本阶段未新增依赖或修改锁文件。
+
+2026-10-13 新增可选组 `camera`（NumPy/Pillow）、`realsense`（pyrealsense2
+2.56.5.9235）、`yolo`（Ultralytics）。由 uv 生成锁文件；核心依赖仍不强制模型 SDK。
+相机、YOLO、TTS 可以使用不同 Python 环境，通过 Zenoh 通信。安装与权重校验要求见
+[相机与视觉播报](CAMERA.md)；SDK 安装成功不等于 D405 实机已验证。
+
 ## 1. 结论
 
 V1 默认只有 `third_party/wrs` 一个 Git submodule。submodule 用来记录独立源码仓库的确定提交，不是“让系统看起来更模块化”的工具。父仓库的 gitlink 记录具体 commit；只写 `.gitmodules` 并不能创建真实 submodule。[S04]
@@ -97,6 +143,38 @@ bootstrap 用项目本地 uv 0.12.15 从 uv.lock 导出带哈希 requirements，
 M3 科学包路径补充：指定 venv 的 pyvenv.cfg 设置 include-system-site-packages=true。WRS adapter 仅在自己的进程向 sys.path 后部追加该 venv 与基础解释器的 site-packages；项目锁定 core 包优先，固定 WRS submodule 位于前部并检查真实模块路径。不执行 .pth、不升级或修改共享包。M3 干净机器科学依赖重建仍未验证。
 
 ## Qwen 语音可选依赖
+
+FastSAM 权重准备（2026-10-13）：复用已有 yolo extra/uv.lock，Ultralytics 8.4.175、
+Torch 2.9.0+cu128、Torchvision 0.24.0+cu128。在 `.local/venvs/vision` 实际安装 46 包并
+通过 pip check；没有新增依赖约束或手改锁文件。`setup_vision.ps1` 只安装 SDK，
+`download_fastsam.py --download` 显式下载固定 v8.4.0 的 FastSAM-x 并核对官方 SHA256。
+模型/许可来源见 nodes/segmentation/fastsam_assets.json；权重不进 Git，不需要 SAM3
+的 Meta 授权。该阶段只验证了真实图像/框提示；后续节点接入见下段。
+
+FastSAM 后端接入（2026-10-13）：新增 fastsam extra，Ultralytics 沿用已锁定 8.4.175，
+OpenAI CLIP SDK 固定 Git 提交 d05afc436d78f1c48dc0dbf8e5980a9d471f35f6（MIT），
+普通可选包而非 submodule。uv 实际生成 150 包锁文件；vision 环境现为 52 包，
+pip check 通过。setup_vision.ps1 使用固定基础解释器、--locked --extra fastsam；
+共享/语音环境不变。CLIP ViT-B/32 复用已存在的本机缓存，复制前后核对官方 SHA256，
+未发起该权重下载；清单为 nodes/segmentation/clip_assets.json。节点仅加载显式本地
+文件且关闭 SDK 自动安装/下载。FastSAM/CLIP 模型均实际执行，但文本定位实图核对
+失败（领带误选衬衫）；这项质量限制见 VISUAL_GRASP.md，不能用 SDK 运行成功替代。
+
+YOLO-World → FastSAM 框提示（2026-10-13）：复用本机已有 yolov8m-worldv2.pt，与官方
+Ultralytics assets v8.4.0 SHA256 核对一致，复制到 .local/models/yolo；没有新下载。
+大小 57,233,192 字节，SHA256 b614d33aa35b8e61d988041ff6939dfb3ed627af88ccaf643e4cdb822eb41d71，
+发布 asset 340060299。来源/AGPL-3.0 记录在 nodes/vision/assets.json，并列入包数据。
+沿用现有 Ultralytics/CLIP 和 vision 环境，lock --check 150 包、pip check 52 包通过，
+无新增依赖/环境变更。YOLO-World 的文字编码器显式加载本地已校验 CLIP；FastSAM 框
+提示进程不加载 CLIP。CUDA Toolkit 尚未准备；vswhere 实测 VS 2022 Community 的 C++
+组件已安装，未在当前 PATH 找到 cl 不能推断缺少 MSVC。本轮没有安装编译器或 Toolkit。
+
+SAM3 环境补充（2026-10-13）：`sam3` extra 使用 Transformers 5.15.1、Torch 2.9.0、
+Torchvision 0.24.0，Windows/Linux 从官方 CU128 索引解析 Torch/Torchvision。与 qwen-asr
+的 Transformers 4.57.6 互斥，`scripts/setup_sam3.ps1` 使用固定基础解释器创建独立
+`.local/venvs/sam3`，不修改共享或语音环境。uv 实际重新解析锁定 147 个包，隔离环境
+安装 43 个包并通过 `uv pip check`。该 extra 不下载权重；SAM3 授权、权重可信哈希和
+真实推理、GraspNet CUDA 扩展仍未验证，详见 [视觉抓取](VISUAL_GRASP.md)。
 
 实际选用 Qwen3-ASR-0.6B、Qwen3-TTS-12Hz-0.6B-CustomVoice；qwen-asr 0.0.6 与 TTS 侧 faster-qwen3-tts 0.4.0 的 Transformers 精确依赖冲突（4.57.6 与 5.15.1），通过互斥 uv extras 与两个 .local/venvs 环境隔离。Torch/Torchaudio 2.9.0 CU128；核心默认依赖不增加模型 SDK。固定模型资源、校验与安装入口见 [Qwen 语音指南](QWEN_SPEECH.md)。普通 pip 也可分别安装两个 extra，但复现版本以 uv.lock 与 setup_speech.ps1 为准。
 

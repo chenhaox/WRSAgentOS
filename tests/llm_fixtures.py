@@ -24,7 +24,7 @@ def chat_reply(proposal):
 async def make_llm():
     clients = []
 
-    def make(reply=None):
+    def make(reply=None, **config):
         if callable(reply):
             handler = reply
         else:
@@ -37,7 +37,7 @@ async def make_llm():
                 return httpx.Response(200, json=body)
 
         client = LLMClient(
-            LLMConfig(model="fixture", base_url="https://model.invalid/v1"),
+            LLMConfig(model="fixture", base_url="https://model.invalid/v1", **config),
             transport=httpx.MockTransport(handler),
         )
         clients.append(client)
