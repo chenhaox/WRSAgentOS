@@ -29,6 +29,8 @@ Voice 已是独立 Zenoh 节点，处理已识别的文字、停止意图和控�
 
 地址 `7449 / wrs-demo`。完整词表在 [commands.py](commands.py)；未知词不交给 Mock Planner。“停止”直接控制任务；`s` 也可发送停止，`q` 退出观察。节点重启/中断时，旧录音识别出的运动指令会被拒绝。
 
+[10_remote_mic.py](10_remote_mic.py) 让麦克风留在打开页面的设备上，识别和 UR7e 仍在运行 05 的机器上。用 ASR 环境启动。本机或 `ssh -L 8010:127.0.0.1:8010` 打开 http://127.0.0.1:8010 。同一局域网的其他设备打开打印出的 `https://<地址>:8443`，并信任 `.local/remote-mic` 里的一次性证书。浏览器只在本机页面或已信任的 HTTPS 页面里提供麦克风。Zenoh 仍只监听回环地址。
+
 ## 自然语言目标交给在线模型：按住说话或循环收音
 
 [07_start_llm_voice.py](07_start_llm_voice.py) 使用真正的在线模型 Planner，不做离线回退。启动它前配置 `LLM_PROTOCOL`、`LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY`（GLM、OpenAI、Claude 等写法见 [.env.example](../../.env.example)），安装 `llm` 依赖；凭据不写代码，`.env` 不自动加载。执行语音目标可能产生模型费用。它同时启动 `asr` 节点，首次加载 TTS 与 ASR 模型需要数十秒。

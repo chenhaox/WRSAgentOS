@@ -126,7 +126,7 @@ class ActionRequest(Boundary):
     lease_id: Name
     skill: Name
     version: SkillVersion = 1
-    args: Annotated[dict[Name, Scalar], Field(max_length=8)] = Field(default_factory=dict)
+    args: Annotated[dict[Name, Scalar], Field(max_length=16)] = Field(default_factory=dict)
     state_version: Counter
 
 
@@ -279,9 +279,27 @@ class SpeechData(Boundary):
     last_text: str = Field(default="", max_length=512)
 
 
+class VisionItem(Boundary):
+    """One detection box or one grasp candidate. Coordinates stay in the input frame."""
+
+    label: str = Field(min_length=1, max_length=64)
+    score: float = Field(ge=0, le=1)
+    xyxy: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    translation: list[float] | None = Field(default=None, min_length=3, max_length=3)
+    rotation: list[float] | None = Field(default=None, min_length=9, max_length=9)
+    width: float | None = Field(default=None, ge=0, le=1)
+
+
 class VisionData(Boundary):
+    """Latest vision snapshot. Images, masks, and clouds stay in files."""
+
     kind: Literal["vision"] = "vision"
     completed: Counter = 0
+    task: Literal["", "detect", "segment", "infer_grasps", "graspability"] = ""
+    source: str = Field(default="", max_length=240)
+    summary: str = Field(default="", max_length=240)
+    result_path: str = Field(default="", max_length=240)
+    items: list[VisionItem] = Field(default_factory=list, max_length=8)
     result_id: Name | None = None
     observation_id: Name | None = None
     count: int = Field(default=0, ge=0, le=32)
@@ -349,7 +367,7 @@ class Step(Boundary):
     step_id: Name
     skill: Name
     version: SkillVersion | None = 1
-    args: Annotated[dict[Name, Scalar], Field(max_length=8)] = Field(default_factory=dict)
+    args: Annotated[dict[Name, Scalar], Field(max_length=16)] = Field(default_factory=dict)
     category: Literal["interactive", "background"] = "interactive"
     depends_on: Annotated[list[Name], Field(max_length=12)] = Field(default_factory=list)
     inputs: Annotated[dict[Name, OutputRef], Field(max_length=8)] = Field(default_factory=dict)
