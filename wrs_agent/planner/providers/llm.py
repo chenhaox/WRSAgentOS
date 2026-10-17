@@ -211,13 +211,17 @@ class LLMClient:
         *,
         live_model: bool = False,
         transport: httpx.MockTransport | None = None,
+        api_key: str | None = None,
     ):
         # Only an explicit offline HTTP fixture bypasses the live opt-in.
         if transport is not None and not isinstance(transport, httpx.MockTransport):
             raise LLMError("llm_offline_transport_required")
         if transport is None and not live_model:
             raise LLMError("llm_live_model_opt_in_required")
-        key = "offline-fixture" if transport is not None else os.environ.get("LLM_API_KEY", "")
+        if transport is not None:
+            key = "offline-fixture"
+        else:
+            key = os.environ.get("LLM_API_KEY", "") if api_key is None else api_key
         # A loopback server (vLLM, Ollama) may run without a key; a remote one may not.
         if (not key and not config.local) or (
             key and (len(key) > 512 or not key.isascii() or not key.isprintable() or " " in key)

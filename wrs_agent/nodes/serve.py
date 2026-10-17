@@ -5,10 +5,13 @@ from wrs_agent.nodes.agent import AgentNode
 from wrs_agent.nodes.asr import AsrNode
 from wrs_agent.nodes.node import Node
 from wrs_agent.nodes.tts import TtsNode
+from wrs_agent.nodes.ui import UiNode
 from wrs_agent.nodes.voice import VoiceNode
 from wrs_agent.nodes.wrs import WrsNode
 
-NODES = {node.node_type: node for node in (WrsNode, TtsNode, AgentNode, VoiceNode, AsrNode)}
+NODES = {
+    node.node_type: node for node in (WrsNode, TtsNode, AgentNode, VoiceNode, AsrNode, UiNode)
+}
 
 
 def node_options(role, arguments):

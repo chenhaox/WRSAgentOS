@@ -49,6 +49,7 @@ LIVE = {
     "voice/05_start_wrs_voice.py", "voice/06_push_to_talk.py",
     "voice/07_start_llm_voice.py", "voice/08_listen_goals.py", "voice/09_viewer.py",
     "tts/01_start_node.py", "tts/02_speak.py", "tts/03_cancel.py",
+    "ui/01_dashboard.py", "ui/02_attach.py",
     "camera/06_read_frame.py", "camera/02_start_yolo.py", "camera/03_start_tts.py",
 }
 SUPPORT = {"nodes/greet_skill.py", "voice/commands.py", "_session.py"}

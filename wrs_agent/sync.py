@@ -171,11 +171,15 @@ def launch(
     *, backend="mock", duration=0.4, bindings=None, scene=None, port=0, site="local", env_id=None,
     live_model=False, tts_backend="mock", tts_python=None, tts_prepared_texts=(),
     asr_backend="mock", asr_python=None, asr_script=(), asr_vocabulary=(),
+    ui_port=None, ui_viewer=None, ui_viewer_port=None,
 ):
     """Start configured local nodes; close owned nodes and router on exit."""
     return _session(
         System.launch(
             backend=backend,
+            ui_port=ui_port,
+            ui_viewer=ui_viewer,
+            ui_viewer_port=ui_viewer_port,
             live_model=live_model,
             scene=scene,
             tts_backend=tts_backend,

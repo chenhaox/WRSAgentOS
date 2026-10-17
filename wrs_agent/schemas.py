@@ -326,7 +326,7 @@ class FeatureSnapshot(Boundary):
 
 class NodeInfo(Boundary):
     node_id: Name
-    node_type: Literal["agent", "wrs", "tts", "voice", "asr", "camera", "vision", "custom"]
+    node_type: Literal["agent", "wrs", "tts", "voice", "asr", "camera", "vision", "ui", "custom"]
     target: Name | None = None
     actions: bool = False
     robot_controls: bool = False

@@ -9,10 +9,20 @@ rotmat = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
 rgb = [0.55, 0.55, 0.6]
 geometry = { kind = "box", xyz_lengths = [0.8, 0.6, 0.06] }
 
+# DH50 张开后，碰撞模型的两指之间约 2.8 cm；更宽的物体在 pick 下降时被判为碰撞。
+# 可抓物体底面比支撑面高 1 mm，贴合接触会被碰撞检测当作穿透。
 [objects.A]
 label = "红色方块"
 source = "configuration"
-pos = [0.35, 0.18, 0.02]
+pos = [0.35, 0.18, 0.011]
 rotmat = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
 rgb = [0.85, 0.15, 0.1]
-geometry = { kind = "box", xyz_lengths = [0.06, 0.06, 0.06] }
+geometry = { kind = "box", xyz_lengths = [0.025, 0.025, 0.04] }
+
+[objects.plate]
+label = "盘子"
+source = "configuration"
+pos = [0.4, -0.15, -0.005]
+rotmat = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+rgb = [0.92, 0.92, 0.88]
+geometry = { kind = "box", xyz_lengths = [0.14, 0.14, 0.01] }

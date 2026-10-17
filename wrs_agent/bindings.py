@@ -25,7 +25,9 @@ def load_bindings(path=None):
         if (
             not re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", name)
             or set(node) != {"type", "suffix", "actions", "enabled"}
-            or node["type"] not in {"agent", "wrs", "tts", "voice", "asr", "vision", "custom"}
+            or node["type"] not in {
+                "agent", "wrs", "tts", "voice", "asr", "vision", "ui", "custom",
+            }
             or not isinstance(node["suffix"], str)
             or not re.fullmatch(r"[A-Za-z0-9_.-]{0,40}", node["suffix"])
             or type(node["actions"]) is not bool

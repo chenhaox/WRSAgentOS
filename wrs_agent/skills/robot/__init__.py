@@ -2,11 +2,22 @@
 
 from wrs_agent.skills.robot.definitions import (
     SKILLS,
+    ControlArgs,
     GripperArgs,
     MoveArgs,
     PickArgs,
     PlaceArgs,
+    PlaceOnArgs,
+    PourArgs,
     RelativeMoveArgs,
+    ReorientArgs,
+    ScoopArgs,
+    SeatInArgs,
+    StirArgs,
 )
 
-__all__ = ["SKILLS", "GripperArgs", "MoveArgs", "PickArgs", "PlaceArgs", "RelativeMoveArgs"]
+__all__ = [
+    "SKILLS", "ControlArgs", "GripperArgs", "MoveArgs", "PickArgs", "PlaceArgs",
+    "PlaceOnArgs", "PourArgs", "RelativeMoveArgs", "ReorientArgs", "ScoopArgs",
+    "SeatInArgs", "StirArgs",
+]

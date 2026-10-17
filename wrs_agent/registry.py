@@ -101,7 +101,8 @@ class NodeRegistry:
         self._refresh_lock = asyncio.Lock()
         self._changed = asyncio.Event()
         self._loop = asyncio.get_running_loop()
-        self._prefix = discovery_prefix(bus, env_id or bus.env_id)
+        self.env_id = env_id or bus.env_id
+        self._prefix = discovery_prefix(bus, self.env_id)
         self._cancel_initial = None
         self._subscription = bus.session.liveliness().declare_subscriber(
             self._prefix + "*/*/*",

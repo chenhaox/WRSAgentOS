@@ -13,8 +13,8 @@ configured["A"] = configured["A"].model_copy(
     update={"rotmat": [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]})
 configured["unknown"] = ObjectData(source="configuration", pos=[0.1, 0.2, 0.3])
 snapshot = model.load_scene(configured)
-assert model.robot in model.scene.mecbas and len(model.scene.sobjs) == 2
-for name in ("table", "A"):
+assert model.robot in model.scene.mecbas and len(model.scene.sobjs) == 3
+for name in ("table", "A", "plate"):
     obj = model.objects[name][1]
     np.testing.assert_allclose(obj.pos, configured[name].pos, atol=1e-6)
     np.testing.assert_allclose(obj.rotmat, configured[name].rotmat, atol=1e-6)
@@ -23,7 +23,7 @@ assert snapshot["unknown"].rotmat is None and "unknown" not in model.objects
 
 viewer_scene, displayed = wrs.wss.Scene(), {}
 sync_scene_objects(wrs, viewer_scene, snapshot, displayed)
-assert len(viewer_scene.sobjs) == 2
+assert len(viewer_scene.sobjs) == 3
 original = displayed["A"][1]
 sync_scene_objects(wrs, viewer_scene, snapshot, displayed)
 assert displayed["A"][1] is original  # Repeated query must not rebuild geometry.

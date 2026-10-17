@@ -15,6 +15,9 @@ from wrs_agent.skills import (
 )
 
 MOTION = ("observe", "move_named_pose", "move_relative", "set_gripper")
+COOKING = (
+    "reorient", "place_on", "seat_in", "set_control", "pour", "stir", "scoop", "shake_off",
+)
 
 
 def caps():
@@ -54,6 +57,46 @@ def test_gripper_contract_accepts_only_open_or_close_and_denies_grasp_claims():
     spec = SKILLS["set_gripper"].spec
     assert spec.resources == ["arm"] and spec.verification == "wrs_fk"
     assert "never confirms contact or holding" in spec.description
+
+
+@pytest.mark.parametrize(
+    "skill,args",
+    [
+        ("reorient", {"object": "strainer", "orientation": "upright"}),
+        ("place_on", {"object": "lid", "surface": "table"}),
+        ("seat_in", {"object": "noodles", "container": "strainer"}),
+        ("set_control", {"appliance": "cooktop", "state": "on"}),
+        ("pour", {"source": "measuring_cup", "target": "pot"}),
+        ("stir", {"tool": "spoon", "vessel": "pot"}),
+        ("scoop", {"tool": "ladle", "source": "pot", "target": "bowl"}),
+        ("shake_off", {"object": "strainer"}),
+    ],
+)
+def test_cooking_contracts_take_observed_names_only(skill, args):
+    assert validate_skill(skill, 1, args, registry=SKILLS).model_dump() == args
+    for extra in ({"x": 0.1}, {"pose": "home"}):
+        with pytest.raises(AgentError, match="invalid_arguments"):
+            validate_skill(skill, 1, {**args, **extra}, registry=SKILLS)
+
+
+@pytest.mark.parametrize(
+    "skill,args",
+    [
+        ("seat_in", {"object": "pot", "container": "pot"}),
+        ("place_on", {"object": "plate", "surface": "plate"}),
+        ("pour", {"source": "pot", "target": "pot"}),
+        ("scoop", {"tool": "ladle", "source": "pot", "target": "pot"}),
+        ("reorient", {"object": "strainer", "orientation": "sideways"}),
+        ("set_control", {"appliance": "cooktop", "state": "high"}),
+    ],
+)
+def test_cooking_contracts_reject_self_reference_and_unknown_states(skill, args):
+    with pytest.raises(AgentError, match="invalid_arguments"):
+        validate_skill(skill, 1, args, registry=SKILLS)
+
+
+def test_cooking_skills_are_contracts_only_until_a_backend_registers_them():
+    assert all(SKILLS[name].handler is None for name in COOKING)
 
 
 def test_registry_is_returned_by_copy():

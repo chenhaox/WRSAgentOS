@@ -99,6 +99,10 @@ class VirtualModel:
             result[name] = ObjectData.model_validate(values)
         return result
 
+    def object_data(self, name):
+        data, obj = self.objects[name]
+        return data.model_copy(update={"pos": obj.pos.tolist(), "rotmat": obj.rotmat.tolist()})
+
     def read(self):
         tcp_tf = self.tcp.tf
         return {
@@ -203,11 +207,12 @@ class VirtualState:
         self.kinematics = kinematics
         self.objects = objects or {}
         self.pose = "home"
+        self.held = None
         self.facts = {}  # Backend-owned extras, e.g. which device the model mirrors.
 
     def snapshot(self):
         return SceneData(
-            robot=RobotData(pose=self.pose, kinematics=self.kinematics),
+            robot=RobotData(pose=self.pose, kinematics=self.kinematics, held_object=self.held),
             objects={name: obj.model_copy(deep=True) for name, obj in self.objects.items()},
             facts={"calibration": "wrs2-ur7e-dh50-v1", "collision_checked": False, **self.facts},
         )
@@ -218,6 +223,14 @@ UNSUPPORTED = {
     "pick": "DH50 jaw is modeled, but there is no validated grasp/contact scene.",
     "place": "No verified held-object/contact state.",
     "verify": "Object placement verifier requires a grasp scene.",
+    **dict.fromkeys(
+        ("reorient", "place_on", "seat_in", "set_control"),
+        "Needs the kitchen scene geometry and a held-object/contact check.",
+    ),
+    **dict.fromkeys(
+        ("pour", "stir", "scoop", "shake_off"),
+        "Computed in wrs_motion but not registered on this node yet.",
+    ),
     "collision_planning": "No collision-checked path in this kinematic profile.",
 }
 
@@ -254,6 +267,9 @@ async def advance_virtual(call, model, duration, skill, state, args, stop, progr
             state.version += 1
             return state.kinematics["valid"]
         count = max(2, round(duration / 0.02) + 1)
+        if skill == "set_gripper" and state.held is not None:
+            # Opening here would leave the object floating; place_on releases it.
+            raise SkillFailure("object_held")
         if skill == "move_relative":
             await call(model.begin_relative, (args.dx, args.dy, args.dz), count)
         elif skill == "set_gripper":
@@ -267,6 +283,8 @@ async def advance_virtual(call, model, duration, skill, state, args, stop, progr
                 state.pose = None
             # One in-flight FK only. No model object is read by the control thread.
             state.kinematics = await call(model.step, index)
+            if state.held is not None:
+                state.objects[state.held] = await call(model.object_data, state.held)
             state.version += 1
             if stop.is_set():
                 return False
@@ -296,21 +314,39 @@ async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_
     if not 0 < duration <= 30:
         raise ValueError("invalid_duration")
     call, model, state, close = await open_model(scene)
+    skills = [
+        SKILLS[name].bind(partial(advance_virtual, call, model, duration, name))
+        for name in ROBOT_SKILLS
+    ]
+    unsupported = dict(UNSUPPORTED)
+    if scene is not None:
+        # Without configured objects there is nothing to grasp or place onto.
+        from wrs_agent.env import wrs_pick
+
+        try:
+            planner = await call(wrs_pick.VirtualPickPlace, model)
+        except BaseException:
+            await close()
+            raise
+        skills += [
+            SKILLS[name].bind(partial(wrs_pick.advance_pick_place, call, planner, name))
+            for name in wrs_pick.SKILLS
+        ]
+        for name in wrs_pick.SKILLS:
+            del unsupported[name]
+        unsupported["collision_planning"] = "Only pick and place_on plan collision-checked paths."
     return ActionExecutor(
         journal_path,
         state=state,
         close_backend=close,
-        skills=[
-            SKILLS[name].bind(partial(advance_virtual, call, model, duration, name))
-            for name in ROBOT_SKILLS
-        ],
+        skills=skills,
         backend="wrs",
         features_extra={
             "verification": "wrs_fk",
             "stop_scope": "virtual_fk_boundary",
             "controller_flush": False,
             "unsupported": {
-                **UNSUPPORTED,
+                **unsupported,
                 "hardware": "Virtual profile; the ur_rtde backend drives the real UR7e.",
             },
         },

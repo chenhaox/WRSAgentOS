@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WRS-Agent · 新建会话</title>
+<link rel="stylesheet" href="/static/dashboard.css" />
+</head>
+<body>
+  <div id="launcher">
+    <div class="launch-card">
+      <h2><span class="dot">●</span> WRS-Agent · 新建会话</h2>
+      <div class="sub">UI 节点只负责显示和下发请求；机器人、规划和语音都由各自的节点执行。先确认已发现的节点，再进入监控页下任务。</div>
+      <div class="lform">
+        <div class="lfield full">
+          <label>连接</label>
+          <div id="connHint" class="scene-hint">正在读取连接信息…</div>
+        </div>
+        <div class="lfield full">
+          <label>已发现的节点</label>
+          <div id="nodeList" class="node-list"><span class="meta">搜索中…</span></div>
+        </div>
+        <div class="lfield">
+          <label for="f-mode">机器人模式</label>
+          <select id="f-mode">
+            <option value="">保持当前</option>
+            <option value="virtual">virtual（只驱动模型）</option>
+            <option value="real">real（驱动真机）</option>
+          </select>
+        </div>
+        <div class="lfield">
+          <label>3D 画面</label>
+          <div id="viewerHint" class="scene-hint small">—</div>
+        </div>
+        <div class="lfield full">
+          <label>可用技能</label>
+          <div id="skillHint" class="scene-hint small">等待动作节点…</div>
+        </div>
+
+        <div class="lfield full section">决策大脑（Agent 节点上的大模型）</div>
+        <div class="lfield full lcheck">
+          <input type="checkbox" id="f-llm" />
+          <label for="f-llm">启用大模型规划（输入或说出自然语言目标时需要；会产生模型费用）</label>
+        </div>
+        <div class="lfield">
+          <label for="f-preset">服务商预设</label>
+          <select id="f-preset">
+            <option value="">自定义</option>
+            <option value="glm">智谱 GLM</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="qwen">通义千问（DashScope）</option>
+            <option value="kimi">Moonshot Kimi</option>
+            <option value="openai">OpenAI</option>
+            <option value="ollama">本机 Ollama</option>
+          </select>
+        </div>
+        <div class="lfield">
+          <label for="f-protocol">协议</label>
+          <select id="f-protocol">
+            <option value="openai_chat">openai_chat</option>
+            <option value="openai_responses">openai_responses</option>
+            <option value="anthropic_messages">anthropic_messages</option>
+          </select>
+        </div>
+        <div class="lfield full">
+          <label for="f-base-url">Base URL</label>
+          <input type="text" id="f-base-url" placeholder="选择上方预设，或在此输入地址" />
+        </div>
+        <div class="lfield">
+          <label for="f-model">模型 ID</label>
+          <input type="text" id="f-model" placeholder="选择上方预设，或在此输入模型 ID" />
+        </div>
+        <div class="lfield">
+          <label for="f-key">API Key</label>
+          <input type="password" id="f-key" autocomplete="off" placeholder="留空则用 Agent 的 LLM_API_KEY" />
+        </div>
+        <div class="lfield full">
+          <label for="f-proxy">代理（可选，大模型请求专用）</label>
+          <input type="text" id="f-proxy" placeholder="不需要代理就留空" />
+        </div>
+        <div class="lfield full">
+          <div id="plannerHint" class="scene-hint small">读取 Agent 状态…</div>
+        </div>
+
+        <div class="lfield full section">语音</div>
+        <div class="lfield">
+          <label for="f-voice">语音输入</label>
+          <select id="f-voice">
+            <option value="auto">自动（优先 ASR 节点）</option>
+            <option value="asr">ASR 节点（本机 Qwen 识别）</option>
+            <option value="browser">浏览器识别（Edge / Chrome）</option>
+            <option value="off">关闭</option>
+          </select>
+        </div>
+        <div class="lfield">
+          <label for="f-speak">结果播报</label>
+          <select id="f-speak">
+            <option value="auto">自动（优先 TTS 节点）</option>
+            <option value="browser">浏览器朗读</option>
+            <option value="off">关闭</option>
+          </select>
+        </div>
+        <div class="lfield full">
+          <div id="voiceHint" class="scene-hint small">检查语音节点…</div>
+        </div>
+      </div>
+      <div class="launch-actions">
+        <button id="launchBtn" type="button">进入监控</button>
+        <button id="applyBtn" type="button" class="ghost">只应用模型设置</button>
+        <span id="launchStatus"></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="app" class="hidden">
+    <header>
+      <h1><span class="dot">●</span> WRS-Agent <span class="meta">实时监控</span></h1>
+      <span id="statusBadge" class="badge b-stale">空闲</span>
+      <span id="resultBadge" class="badge b-fail" style="display:none"></span>
+      <div id="runtimeStatus" class="runtime-status"></div>
+      <span class="meta" id="taskMeta"></span>
+      <span class="grow"></span>
+      <button id="newSessionBtn" type="button" class="ghost">新建会话</button>
+      <span class="meta" id="connMeta">连接中…</span>
+    </header>
+
+    <main>
+      <div class="col left">
+        <div class="panel-title">
+          <span>规划、任务与节点事件</span>
+          <span class="count" id="evCount"></span>
+          <span class="grow"></span>
+          <label class="meta plain"><input type="checkbox" id="showtools" /> 展开动作详情</label>
+          <label class="meta plain"><input type="checkbox" id="shownodes" checked /> 显示节点上下线</label>
+          <label class="meta plain"><input type="checkbox" id="autoscroll" checked /> 自动滚动</label>
+        </div>
+        <div id="transcript"><div class="empty">在下方输入目标或在右侧选择技能，这里会显示规划与执行过程。</div></div>
+        <section class="composer" aria-label="任务指令">
+          <div id="interactionStatus" class="composer-status">输入目标后点发送。</div>
+          <div class="composer-examples">例如：回到初始位置 · 向上移动 5 厘米 · 状态 · 停止</div>
+          <div class="composer-status" id="brainStatus"></div>
+          <textarea id="chatInput" rows="3" placeholder="在这里输入自然语言目标（由 Agent 节点的大模型规划）"></textarea>
+          <div class="task-row">
+            <button id="runBtn" type="button">发送</button>
+            <button id="talkBtn" type="button" class="talk">按住说话</button>
+            <button id="stopBtn" type="button" class="danger">立即停止</button>
+            <button id="allowBtn" type="button" class="ghost">允许动作</button>
+            <span id="inboxStatus" class="composer-status"></span>
+          </div>
+          <div class="composer-row">
+            <span class="composer-hint">Enter 发送 · Shift+Enter 换行 · 输入框外按住空格说话 · “停止”总是走控制通道，不经过大模型</span>
+          </div>
+        </section>
+      </div>
+
+      <div class="gutter gutter-v" title="拖动调整栏宽"></div>
+
+      <div class="col right">
+        <div class="framewrap">
+          <div class="frame-tabs">
+            <button type="button" class="active">WRS 画面</button>
+            <button type="button" id="cameraToggle" aria-pressed="false" hidden
+                    title="在画面里显示或隐藏相机观测面板">相机观测</button>
+            <a id="openViewer" href="http://127.0.0.1:8000/" target="_blank" rel="noreferrer">单独打开</a>
+          </div>
+          <iframe id="sceneFrame" title="WRS viewer"></iframe>
+          <div class="frame-cap" id="frameCap">等待画面…</div>
+        </div>
+        <div class="gutter gutter-h" title="拖动调整画面高度"></div>
+        <div class="col" style="min-height:0">
+          <div class="panel-title">
+            <div class="tabs">
+              <button type="button" class="tab active" data-tab="timeline">动作时间线 <span class="count" id="stepCount"></span></button>
+              <button type="button" class="tab" data-tab="skills">技能</button>
+              <button type="button" class="tab" data-tab="robot">机器人</button>
+            </div>
+          </div>
+          <div id="timeline" class="pane"><div class="empty">还没有动作。</div></div>
+          <div id="skills" class="pane hidden"><div class="empty">没有已发现的技能。</div></div>
+          <div id="robot" class="pane hidden"><div class="empty">没有在线的机器人节点。</div></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script type="module" src="/static/dashboard.js"></script>
+</body>
+</html>

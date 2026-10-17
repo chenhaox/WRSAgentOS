@@ -74,7 +74,7 @@ def test_nested_wrs_snapshot_cannot_mutate_backend_state():
 
 def test_shipped_scene_fits_message_budget_and_keeps_configuration_provenance():
     objects = load_scene(ROOT / "examples/wrs/scene.toml")
-    assert set(objects) == {"table", "A"}
+    assert set(objects) == {"table", "A", "plate"}
     assert all(obj.source == "configuration" and obj.observed_at_ns is None
                for obj in objects.values())
     assert len(encode(SceneData(robot=RobotData(), objects=objects))) < MAX_BYTES // 2

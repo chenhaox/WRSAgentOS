@@ -88,12 +88,16 @@ class LocalStack:
         asr_python=None,
         asr_script=(),
         asr_vocabulary=(),
+        ui_port=None,
+        ui_viewer=None,
+        ui_viewer_port=None,
     ):
         arguments = {
             "backend": backend, "duration": duration, "fault": fault, "scene": scene,
             "live_model": live_model, "tts_backend": tts_backend,
             "tts_prepared_texts": tts_prepared_texts, "asr_backend": asr_backend,
             "asr_script": asr_script, "asr_vocabulary": asr_vocabulary,
+            "ui_port": ui_port, "ui_viewer": ui_viewer, "ui_viewer_port": ui_viewer_port,
         }
         self.options = {
             role: node.options_type.model_validate(node_options(role, arguments))
