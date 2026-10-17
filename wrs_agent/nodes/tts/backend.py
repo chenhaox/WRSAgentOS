@@ -36,7 +36,9 @@ def play_audio(chunks, rate, stopped):
     try:
         if stopped.is_set():
             return False
-        stream = sd.OutputStream(samplerate=rate, channels=1, dtype="float32", latency="low")
+        # Default latency. "low" underruns on this machine's Pulse/USB device and
+        # the speak action then reports UNKNOWN instead of finishing.
+        stream = sd.OutputStream(samplerate=rate, channels=1, dtype="float32")
         stream.start()
         block = max(1, rate // 50)
         for offset in range(0, len(audio), block):

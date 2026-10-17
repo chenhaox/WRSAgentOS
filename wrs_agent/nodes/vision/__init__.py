@@ -1,4 +1,4 @@
-"""Model nodes consume camera observations directly; the Agent receives small results."""
+"""Camera YOLO node. Resident model workers stay in wrs_agent.nodes.vision.nodes."""
 
 from wrs_agent.nodes.vision.node import YoloNode
 
