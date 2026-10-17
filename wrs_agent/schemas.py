@@ -205,7 +205,7 @@ class KinematicState(Boundary):
     # Jaw opening read back from the mounted gripper model; None when no gripper is mounted.
     gripper_width: float | None = Field(default=None, ge=0, le=0.5)
     frame_id: Literal["world"] = "world"
-    source: Literal["wrs_fk"] = "wrs_fk"
+    source: Literal["wrs_fk", "fafu_feedback"] = "wrs_fk"
     observed_at_ns: int = Field(gt=0)
     valid: bool = True
 

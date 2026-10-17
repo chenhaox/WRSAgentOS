@@ -1,8 +1,12 @@
 """Speech execution: output state, local playback, and real/offline action backends."""
 
 import asyncio
+import os
 import threading
+import uuid
+import wave
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from wrs_agent.executor import ActionExecutor, ExecutionUnknown, SkillFailure
 from wrs_agent.schemas import SpeechData
@@ -21,6 +25,28 @@ class SpeechState:
         return SpeechData(completed=self.completed, last_text=self.last_text)
 
 
+def mirror_playback(audio, rate):
+    """Copy one utterance for the remote page. Local playback still owns success."""
+    directory = os.environ.get("WRS_SPEECH_MIRROR", "").strip()
+    if not directory:
+        return
+    import numpy as np
+
+    samples = np.clip(np.asarray(audio, dtype="float32").reshape(-1), -1.0, 1.0)
+    pcm = (samples * 32767.0).astype("<i2")
+    folder = Path(directory)
+    folder.mkdir(parents=True, exist_ok=True)
+    speech_id = uuid.uuid4().hex
+    temporary = folder / f".speech-{speech_id}.wav"
+    with wave.open(str(temporary), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(int(rate))
+        handle.writeframes(pcm.tobytes())
+    temporary.replace(folder / "speech.wav")
+    (folder / "speech.id").write_text(speech_id)
+
+
 def play_audio(chunks, rate, stopped):
     """Only the owner thread touches the stream; cancel aborts queued local output."""
     import numpy as np
@@ -32,21 +58,30 @@ def play_audio(chunks, rate, stopped):
     ).reshape(-1, 1)
     if not len(audio) or not np.isfinite(audio).all():
         raise SkillFailure("invalid_synthesized_audio")
+    try:
+        mirror_playback(audio, rate)
+    except Exception:
+        pass  # The robot speaker is the confirmed output; the remote copy is extra.
     stream = None
     try:
         if stopped.is_set():
             return False
-        # Default latency. "low" underruns on this machine's Pulse/USB device and
-        # the speak action then reports UNKNOWN instead of finishing.
-        stream = sd.OutputStream(samplerate=rate, channels=1, dtype="float32")
+        # "low" underruns on this machine. A recovered underrun still makes
+        # write() return a count; that used to abort the rest of the utterance.
+        # This machine's default ALSA device rejects the synthesizer rate.
+        # WRS_AUDIO_DEVICE selects one that can play it (with PA_ALSA_PLUGHW).
+        chosen = os.environ.get("WRS_AUDIO_DEVICE", "").strip()
+        stream = sd.OutputStream(
+            samplerate=rate, channels=1, dtype="float32", latency="high",
+            device=int(chosen) if chosen.isdigit() else (chosen or None),
+        )
         stream.start()
-        block = max(1, rate // 50)
+        block = max(1, rate // 25)
         for offset in range(0, len(audio), block):
             if stopped.is_set():
                 stream.abort()
                 return False
-            if stream.write(audio[offset : offset + block]):
-                raise RuntimeError("audio_output_underflow")
+            stream.write(audio[offset : offset + block])
         if stopped.is_set():
             stream.abort()
             return False

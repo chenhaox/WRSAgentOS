@@ -58,6 +58,11 @@ class GraspOutput(Boundary):
     text: str = Field(min_length=1, max_length=512)
 
 
+class HandEyeOutput(Boundary):
+    observation_id: Name
+    text: str = Field(min_length=1, max_length=512)
+
+
 SEGMENT = Skill(
     name="segment_object", arguments=SegmentArgs, output=SegmentOutput,
     resources=("segmentation",), timeout=30,
@@ -99,6 +104,17 @@ INFER_GRASPS = Skill(
                  "Candidates are proposals, not a successful grasp or a motion authorization. "
                  "Execution requires Environment calibration, collision and freshness checks.",
     verification="candidates_bound_to_segment_and_observation",
+)
+
+APPLY_HAND_EYE = Skill(
+    name="apply_hand_eye", arguments=ExecuteGraspArgs, output=HandEyeOutput,
+    result_parameters=("candidate_set_id",), resources=("arm",), timeout=30,
+    description="Transform one GraspNet candidate into the Fafu base frame with a measured "
+                "fixed-camera extrinsic. The arm does not move.",
+    instructions="Bind candidate_set_id to infer_grasps output in the same task. "
+                 "The calibration source must be measured. Tool +X is the approach axis. "
+                 "Speak the returned text if announcing the pose. Do not treat this as a grasp.",
+    verification="pose_bound_to_measured_camera_extrinsic",
 )
 
 VIRTUAL_GRASP = Skill(

@@ -24,7 +24,9 @@ from wrs_agent.nodes.asr.qwen import QwenASR
 
 CONFIG = Path(__file__).with_name("wrs_bindings.toml")
 CERT_DIR = Path(__file__).resolve().parents[2] / ".local/remote-mic"
-VIEWER = ("127.0.0.1", 8001)
+MIRROR = Path(__file__).resolve().parents[2] / ".local/runs/voice-goal/mirror"
+VIEWER = ("127.0.0.1", 8002)
+HTTP_PORT = 8001  # SSH 转发这个端口时，浏览器把它当成本机，可以直接用麦克风。
 HTTPS_PORT = 8443
 RATE = 16000
 MAX_SECONDS = 12.0
@@ -203,6 +205,34 @@ function attach() {
 }
 new MutationObserver(attach).observe(document.documentElement, { childList: true, subtree: true });
 attach();
+let playCtx, speechId = "";
+function ensurePlay() {
+  if (!playCtx) playCtx = new AudioContext();
+  if (playCtx.state === "suspended") playCtx.resume();
+  return playCtx;
+}
+document.addEventListener("pointerdown", () => { ensurePlay(); }, true);
+async function pollSpeech() {
+  try {
+    const response = await fetch("/speech?after=" + encodeURIComponent(speechId), { cache: "no-store" });
+    if (response.status === 200) {
+      const next = response.headers.get("X-Speech-Id") || "";
+      const bytes = await response.arrayBuffer();
+      if (next && next !== speechId && bytes.byteLength) {
+        speechId = next;
+        const ctx = ensurePlay();
+        const buffer = await ctx.decodeAudioData(bytes.slice(0));
+        const node = ctx.createBufferSource();
+        node.buffer = buffer;
+        node.connect(ctx.destination);
+        node.start();
+        setStatus("正在这台电脑上播放播报。");
+      }
+    }
+  } catch (error) { /* 下一次轮询再试 */ }
+  setTimeout(pollSpeech, 400);
+}
+pollSpeech();
 </script>
 """
 
@@ -283,6 +313,32 @@ class BrowserMic:
             print(f"识别：{transcript.text}；{message}", flush=True)
             return {"ok": True, "text": transcript.text, "message": message}
 
+    async def _speech(self, writer, query):
+        """Serve the utterance the robot is playing, once per id."""
+        wanted = ""
+        for item in query.split("&"):
+            if item.startswith("after="):
+                wanted = item.split("=", 1)[1]
+        identity = MIRROR / "speech.id"
+        audio = MIRROR / "speech.wav"
+        if not identity.is_file() or not audio.is_file():
+            writer.write(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            return
+        speech_id = identity.read_text().strip()
+        if not speech_id or speech_id == wanted:
+            writer.write(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            return
+        payload = audio.read_bytes()
+        header = (
+            "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\n"
+            f"X-Speech-Id: {speech_id}\r\nContent-Length: {len(payload)}\r\n"
+            "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
+        ).encode("ascii")
+        writer.write(header + payload)
+        await writer.drain()
+
     async def handle(self, reader, writer):
         try:
             head, rest = await _read_headers(reader)
@@ -292,7 +348,15 @@ class BrowserMic:
             parts = request.split(" ")
             if len(parts) < 2:
                 return
-            method, path = parts[0], parts[1].split("?", 1)[0]
+            method, raw_path = parts[0], parts[1]
+            method_path, _, query = raw_path.partition("?")
+            path = method_path
+            if not (method == "GET" and path == "/speech"):
+                peer = writer.get_extra_info("peername")
+                print(f"[browser-mic] {peer} {method} {path}", flush=True)
+            if method == "GET" and path == "/speech":
+                await self._speech(writer, query)
+                return
             if method == "POST" and path == "/utterance":
                 body = await _read_body(reader, headers, rest)
                 result = await self.accept(body)
@@ -462,13 +526,15 @@ async def main():
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         certificate, key = ensure_certificate(addresses)
         context.load_cert_chain(certificate, key)
-        server = await asyncio.start_server(page.handle, "0.0.0.0", HTTPS_PORT, ssl=context)
-        print("在你自己的电脑打开下面的地址，按住右上角“按住说话”。", flush=True)
+        https = await asyncio.start_server(page.handle, "0.0.0.0", HTTPS_PORT, ssl=context)
+        http = await asyncio.start_server(page.handle, "127.0.0.1", HTTP_PORT)
+        print("在你自己的电脑打开下面任一地址，按住右上角“按住说话”。", flush=True)
+        print(f"http://127.0.0.1:{HTTP_PORT}    （把机器人的 {HTTP_PORT} 转发到你的电脑）", flush=True)
         for address in addresses:
             print(f"https://{address}:{HTTPS_PORT}", flush=True)
-        print("浏览器提示证书不受信任时，选择继续访问，麦克风才会可用。", flush=True)
-        async with server:
-            await server.serve_forever()
+        print("直接打开 https 时，浏览器提示证书不受信任，选择继续访问后麦克风才可用。", flush=True)
+        async with https, http:
+            await asyncio.gather(https.serve_forever(), http.serve_forever())
 
 
 if __name__ == "__main__":

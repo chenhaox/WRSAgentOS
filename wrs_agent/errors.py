@@ -169,6 +169,16 @@ _MESSAGES = {
     "hardware_connect_failed": (
         "连接 UR 控制器或夹爪失败：检查网络、示教器远程控制模式和串口；节点保持虚拟模式。"
     ),
+    "fafu_not_connected": "Fafu 机械臂尚未连接。先把机器人模式切到 real，再发运动指令。",
+    "fafu_named_pose_unsupported": "Fafu 臂只接受命名姿态 home。B 和 C 是 UR7e 模型姿态。",
+    "fafu_kinematics_unavailable": "Fafu 运动学模型没有加载，不能做笛卡尔相对移动。",
+    "fafu_joint_count": "Fafu 反馈的关节数不是 6，不能写入当前机器人状态。",
+    "fafu_connect_failed": (
+        "连接 Fafu 调试板失败：检查 USB 串口、电源和电机应答；节点保持断开。"
+    ),
+    "fafu_hand_eye_requires_measured_calibration": (
+        "Fafu 手眼标定必须是实测外参。虚拟夹具不能用来换算实机抓取点。"
+    ),
     "asr_busy": "This microphone is already capturing another push-to-talk session.",
     "asr_press_finished": "This push-to-talk session already ended; start a new one.",
     "asr_press_not_found": "No push-to-talk session is active with this ID.",

@@ -295,6 +295,52 @@ def test_speech_nodes_do_not_inherit_python_path(tmp_path, monkeypatch):
     assert "PYTHONPATH" in stack.node_env(stack.node_command("agent"))
 
 
+def test_playback_continues_after_output_underflow(monkeypatch):
+    from wrs_agent.nodes.tts.backend import play_audio
+
+    class Samples:
+        def reshape(self, *args):
+            return self
+
+        def __len__(self):
+            return 960
+
+        def __getitem__(self, key):
+            return self
+
+    events = []
+
+    class Stream:
+        def __init__(self, **kwargs):
+            events.append(kwargs.get("latency"))
+
+        def start(self):
+            events.append("start")
+
+        def write(self, samples):
+            events.append("write")
+            return 1
+
+        def abort(self):
+            events.append("abort")
+
+        def stop(self):
+            events.append("drain")
+
+        def close(self):
+            events.append("close")
+
+    monkeypatch.setitem(sys.modules, "numpy", SimpleNamespace(
+        asarray=lambda *a, **k: Samples(),
+        concatenate=lambda parts: Samples(),
+        isfinite=lambda a: SimpleNamespace(all=lambda: True),
+    ))
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace(OutputStream=Stream))
+    assert play_audio([0], 24000, threading.Event()) is True
+    assert events[0] == "high"
+    assert "abort" not in events and events[-2:] == ["drain", "close"]
+
+
 @pytest.mark.parametrize("failure", ["write", "abort", "close"])
 def test_audio_device_errors_never_look_like_confirmed_success(monkeypatch, failure):
     from wrs_agent.nodes.tts.backend import play_audio

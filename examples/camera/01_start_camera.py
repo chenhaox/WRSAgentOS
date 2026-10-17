@@ -15,7 +15,8 @@ SESSION = "voice"
 # 选择 "realsense" 就会打开真实相机；"synthetic" 使用合成图像。
 BACKEND = "realsense"
 SERIAL = ""  # 留空使用默认相机，多台设备时可指定序列号。
-WIDTH, HEIGHT, FPS = 848, 480, 30  # 仅调整相机采集，YOLO/分割/抓姿独立调度。
+# 这台 D405 在 USB 2.1 上，848×480 的彩色和深度最高同时到 10 帧。
+WIDTH, HEIGHT, FPS = 848, 480, 10  # 仅调整相机采集，YOLO/分割/抓姿独立调度。
 
 
 async def main():

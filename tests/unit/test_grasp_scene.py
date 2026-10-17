@@ -39,9 +39,40 @@ def test_network_sampling_does_not_change_when_only_the_target_mask_changes():
     points, left = scene()
     a, roi_a = sample_scene(points, left, count=128)
     b, roi_b = sample_scene(points, ~left, count=128)
+    # This grid is smaller than the neighborhood margin, so both targets still see it.
     np.testing.assert_array_equal(a, b)
     np.testing.assert_array_equal(roi_a, ~roi_b)
     assert len(np.unique(a, axis=0)) == 128
+
+
+def test_sampling_keeps_nearby_background_and_drops_the_rest_of_the_room():
+    points, _mask = scene()
+    points = points.copy()
+    points[:, 12:, 0] = 5.0
+    mask = np.zeros(points.shape[:2], dtype=bool)
+    mask[:, 4:8] = True
+    cloud, roi = sample_scene(points, mask, count=400, margin_m=.10)
+    assert (cloud[:, 0] < 1).all()
+    assert roi.any() and (~roi).any()
+    assert cloud[roi, 0].max() < .08
+    far = points.copy()
+    far_mask = np.zeros(mask.shape, dtype=bool)
+    far_mask[:, 12:] = True
+    other, other_roi = sample_scene(far, far_mask, count=64, margin_m=.10)
+    assert (other[:, 0] > 1).all() and other_roi.all()
+
+
+def test_sampling_keeps_the_near_surface_and_drops_the_wall_behind_the_mask():
+    points, _mask = scene()
+    points = points.copy()
+    points[:, 8:, 2] = 0.8
+    mask = np.zeros(points.shape[:2], dtype=bool)
+    mask[:, 4:12] = True
+    cloud, roi = sample_scene(points, mask, count=400, margin_m=.10)
+    assert roi.any() and (~roi).any()
+    assert (cloud[roi, 2] < 0.4).all()
+    assert (cloud[:, 2] < 0.5).all()
+    assert cloud[roi, 0].min() >= .04 and cloud[roi, 0].max() < .08
 
 
 def test_target_requires_enough_valid_depth_even_when_background_is_present():
