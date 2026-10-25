@@ -76,6 +76,7 @@ class ActionExecutor:
             self.admission = "UNKNOWN"
             self.stop_confirmed = False
         self.active = None
+        self.state_refreshing = False
         self.runner = None
         self.stop_signal = asyncio.Event()
         self.leases = OrderedDict()
@@ -211,6 +212,8 @@ class ActionExecutor:
             return "stale_epoch"
         if self.admission != "OPEN":
             return "admission_closed"
+        if self.state_refreshing:
+            return "resource_busy"
         if request.state_version != self.world.version:
             return "stale_state"
         grant = self.leases.get(request.lease_id)

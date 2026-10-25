@@ -47,7 +47,8 @@ conda activate wrs
 | `wrs_agent/env/wrs.py` | 默认选择 FAFU；加载和同步 box/STL 场景 |
 | `wrs_agent/assets/fafu/profile.toml` | 底座位置、home/B/C 关节姿态；角度单位弧度 |
 | `wrs_agent/assets/fafu/` | 项目内 URDF 和 7 个连杆 STL |
-| `wrs_agent/assets/kitchen/scene.toml` | 唯一正式默认厨具配置，位置单位米 |
+| `wrs_agent/assets/kitchen/scene.toml` | 正式默认厨具模型、材质与 layout 引用 |
+| `wrs_agent/assets/kitchen/layout.toml` | 厨具位置、角度、父子跟随关系；位置用米、角度用度 |
 | `wrs_agent/assets/kitchen/meshes/` | 10 个已归一化到米的场景网格 |
 | `wrs_agent/schemas.py` | 支持 mesh asset ID 和 alpha 的场景协议 |
 | `design/kitchen/FAFU_kitchen.blend` | 可编辑 Blender 场景；不参与 AgentOS 运行 |
@@ -56,7 +57,7 @@ conda activate wrs
 
 `scene.toml` 包含桌面、电磁炉、大锅、大锅盖、量杯、漏勺、盘子、盘上长方体、捞网架、两套碗与支架整体及碗架，以及第二套碗内 4 个淡黄色食物块，共 17 个对象。2026-10-17 的替换与新增资源说明见 [KITCHEN_ASSET_UPDATE.md](KITCHEN_ASSET_UPDATE.md)。量杯 alpha=0.28；机械臂基座 x=-0.125 米；长方体为 100×60×30 毫米。
 
-改变位置请编辑物体 `pos`；改变颜色编辑 `rgb`；改变透明度编辑 `alpha`（0 透明，1 不透明）。STL 的 `asset` 相对 `wrs_agent/assets`，不接受磁盘绝对路径或 `../`。文件已经以米保存，不要再乘 0.001。Blender 文件与 TOML 不会自动双向同步。
+临时改变位置和朝向可以运行 `./scripts/run.ps1 examples/wrs/16_edit_kitchen.py`，按提示选择厨具并输入位置、角度。05 每次启动都生成新场景副本，编辑器只改 `.local/kitchen-preview/` 中的运行副本，默认 `layout.toml` 保持不变。05 空闲时会读取摆放修改，刷新 07 的 8000 页面即可看到；退出编辑器后本次场景继续有效，**重启 05 后恢复默认**，再重新运行 07 查看。有 `parent` 的物体相对父物体摆放并跟随它。若以后确实要更改默认摆放，需手动编辑 assets 中的 `layout.toml` 并重启。详细步骤见 [厨具摆放配置指南](KITCHEN_LAYOUT.md)。颜色和透明度仍在 `scene.toml` 编辑 `rgb`、`alpha`（0 透明，1 不透明），这类模型定义修改需要重启节点和观察器。STL 的 `asset` 相对 `wrs_agent/assets`，不接受磁盘绝对路径或 `../`。文件已经以米保存，不要再乘 0.001。Blender 文件与 TOML 不会自动双向同步。
 
 ## 能力和边界
 

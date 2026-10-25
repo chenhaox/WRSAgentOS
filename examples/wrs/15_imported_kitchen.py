@@ -13,9 +13,21 @@ def main():
     parser.add_argument("--scene", type=Path, default=ROOT / "wrs_agent/assets/kitchen/scene.toml")
     parser.add_argument("--port", type=int, default=8007)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument(
+        "--check-layout", action="store_true", help="只检查摆放配置，不加载 WRS 模型"
+    )
     args = parser.parse_args()
+    objects = load_scene(args.scene)
+    if args.check_layout:
+        print(json.dumps({
+            "result": "PASS",
+            "scene": str(args.scene.resolve()),
+            "objects": {name: {"label": obj.label, "pos": obj.pos, "rotmat": obj.rotmat}
+                        for name, obj in objects.items()},
+        }, ensure_ascii=False, indent=2))
+        return
     model = VirtualModel()
-    objects = model.load_scene(load_scene(args.scene))
+    objects = model.load_scene(objects)
     print(
         json.dumps(
             {

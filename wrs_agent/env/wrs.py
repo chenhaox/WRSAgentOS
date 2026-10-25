@@ -1,6 +1,7 @@
 """WRS virtual models: default FAFU; explicit UR7e hardware mirror, each thread-owned."""
 
 import asyncio
+import contextlib
 import site
 import sys
 import time
@@ -66,6 +67,15 @@ def sync_scene_objects(wrs, scene, objects, displayed):
     for name, data in objects.items():
         previous = displayed.get(name)
         if previous is not None and previous[0] == data:
+            continue
+        if (
+            previous is not None and data.valid and data.pos is not None
+            and data.rotmat is not None
+            and previous[0].model_dump(exclude={"pos", "rotmat"})
+            == data.model_dump(exclude={"pos", "rotmat"})
+        ):
+            previous[1].set_pos_rotmat(pos=data.pos, rotmat=data.rotmat)
+            displayed[name] = (data.model_copy(deep=True), previous[1])
             continue
         if previous is not None:
             previous[1].remove_from_scene(scene)
@@ -253,9 +263,12 @@ async def open_model(scene=None, *, model_factory=None):
         if scene is None and getattr(model, "profile", None) == "fafu":
             scene = ROOT / "wrs_agent/assets/kitchen/scene.toml"
             objects = await asyncio.to_thread(load_scene, scene)
+        configured_objects = objects
         if scene is not None:
             objects = await call(model.load_scene, objects)
         state = VirtualState(await call(model.read), objects)
+        state.scene_path = Path(scene) if scene is not None else None
+        state.scene_config = configured_objects
         if getattr(model, "profile", None) == "fafu":
             state.facts.update(robot_model="fafu_baseV1", calibration="fafu-baseV1-tool-link-v1",
                                robot_base_x=model.base_pos[0], robot_base_y=model.base_pos[1],
@@ -319,7 +332,7 @@ async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_
     if not 0 < duration <= 30:
         raise ValueError("invalid_duration")
     call, model, state, close = await open_model(scene)
-    return ActionExecutor(
+    executor = ActionExecutor(
         journal_path,
         state=state,
         close_backend=close,
@@ -340,6 +353,22 @@ async def make_wrs_environment(journal_path, *, duration=0.4, scene=None, allow_
             },
         },
     )
+    if state.scene_path is not None:
+        from wrs_agent.scene_reload import SceneReloader
+
+        reload_scene = SceneReloader(executor, call, model, state.scene_path, state.scene_config)
+        watcher = asyncio.create_task(reload_scene.watch(), name="wrs-scene-layout")
+
+        async def close_with_watcher():
+            try:
+                watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher
+            finally:
+                await close()
+
+        executor.close_backend = close_with_watcher
+    return executor
 
 
 def probe_virtual():
