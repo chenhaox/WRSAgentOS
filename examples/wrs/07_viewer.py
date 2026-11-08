@@ -6,6 +6,7 @@ from examples._session import use_local_token
 from wrs_agent import connect
 from wrs_agent.env.viewer import viewer_hub
 from wrs_agent.env.wrs import VirtualModel, sync_scene_objects
+from wrs_agent.layout_session import current_session
 
 CONFIG = Path(__file__).with_name("bindings.toml")
 VIEWER_PORT = 8000
@@ -35,6 +36,8 @@ if __name__ == "__main__":
         model.sync(initial.data.robot.kinematics.qs)
         displayed = {}
         sync_scene_objects(wrs, world.scene, initial.data.objects, displayed)
+        # Bind the editor to this run; an old viewer cannot edit a restarted 05.
+        layout_scene = current_session()
 
         def update(dt):
             snapshot = system.snapshot(node="wrs")
@@ -50,8 +53,12 @@ if __name__ == "__main__":
         world.schedule_interval(update, 0.1)
         try:
             # 这个帮助函数只管理页面服务，场景和刷新逻辑都在本文件。
-            with viewer_hub(VIEWER_PORT):
-                print(f"打开 http://127.0.0.1:{VIEWER_PORT}，Ctrl+C 退出观察。", flush=True)
+            with viewer_hub(VIEWER_PORT, layout_scene=layout_scene):
+                print(
+                    f"打开 http://127.0.0.1:{VIEWER_PORT}，右上角可调整厨具摆放；"
+                    "修改仅对本次运行有效。Ctrl+C 退出观察。",
+                    flush=True,
+                )
                 world.run()
         finally:
             world.close()  # 关闭显示不会取消远端任务。

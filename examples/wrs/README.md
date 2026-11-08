@@ -10,7 +10,7 @@
 | [04_move_relative.py](04_move_relative.py) | 世界坐标系上下左右移动 2 cm |
 | [05_start_node.py](05_start_node.py) | 启动独立 WRS 和任务服务，等待其他进程连接 |
 | [06_control_arm.py](06_control_arm.py) | 控制已启动的 WRS 节点 |
-| [07_viewer.py](07_viewer.py) | 查询场景快照，显示机器人与物体 |
+| [07_viewer.py](07_viewer.py) | 查询场景快照，显示机器人与物体；网页面板调整厨具位置、摇杆调整朝向 |
 | [08_scene.py](08_scene.py) | 独立加载场景，读取机器人和物体数据 |
 | [16_edit_kitchen.py](16_edit_kitchen.py) | 临时编辑厨具位置和角度；刷新 8000 查看，重启 05 恢复默认 |
 
@@ -25,7 +25,7 @@
 ./scripts/run.ps1 examples/wrs/06_control_arm.py
 ```
 
-浏览器打开 http://127.0.0.1:8000。viewer 关闭只结束显示。节点重启后重新连接 viewer。
+浏览器打开 http://127.0.0.1:8000。右上角“厨具摆放”面板可选择厨具、输入位置，拖动 X/Y 摇杆或 Z 旋钮调整朝向，也可直接输入角度。修改自动提交，节点空闲时通常约 1 秒内同步到画面，无需另开终端编辑器。所有修改只对本次运行有效；重启 05 恢复默认，并需重新运行 07。viewer 关闭只结束显示。
 
 05 每次启动都会复制默认 FAFU 厨具场景，生成本次运行的临时副本。在另一终端运行 `./scripts/run.ps1 examples/wrs/16_edit_kitchen.py`，输入厨具编号、名称或 ID，再输入位置和角度。修改只写入 `.local/kitchen-preview/` 中的运行副本；05 空闲时约 1 秒内读取，刷新 8000 页面即可查看。退出编辑器不会立即还原，但**重启 05 会恢复默认摆放**，并需重新运行 07。默认 [layout.toml](../../wrs_agent/assets/kitchen/layout.toml) 保持不变。详见[厨具摆放指南](../../docs/KITCHEN_LAYOUT.md)。08 仍使用本目录 [scene.toml](scene.toml) 中的工作台与方块，独立执行后自动退出：
 

@@ -385,9 +385,14 @@ def probe_virtual():
     }
 
 
-async def serve_viewer_hub(port):
+async def serve_viewer_hub(port, *, layout_scene=None):
     # Keep all WRS imports in this adapter; no detached server survives the viewer.
     load_wrs()
+    if layout_scene is not None:
+        from wrs_agent.env.layout_web import serve_layout_hub
+
+        await serve_layout_hub(port, layout_scene)
+        return
     from wrs.viewer.server import serve
 
     await serve(host="127.0.0.1", port=port, idle_timeout=0, auto_open=False)

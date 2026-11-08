@@ -1,6 +1,7 @@
 """Terminal editing of the current disposable kitchen; defaults are never written."""
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -74,7 +75,7 @@ def replace_pose(text, name, pos, rpy_deg):
     return text[:start] + block + text[end:]
 
 
-def save_pose(scene, name, pos, rpy_deg, *, session_directory=None):
+def save_pose(scene, name, pos, rpy_deg, *, session_directory=None, expected_revision=None):
     scene = Path(scene).resolve()
     if session_directory is not None and current_session(session_directory) != scene:
         raise ValueError("05 已重新启动，本次输入已取消；请重新选择厨具。")
@@ -87,6 +88,8 @@ def save_pose(scene, name, pos, rpy_deg, *, session_directory=None):
         "pos": pos, "rpy_deg": rpy_deg, "parent": current.parent,
     })
     before = path.read_bytes()
+    if expected_revision is not None and hashlib.sha256(before).hexdigest() != expected_revision:
+        raise ValueError("配置刚被其他程序修改，本次未覆盖。请重新选择并输入。")
     text = replace_pose(before.decode("utf-8"), name, checked.pos, checked.rpy_deg)
     temp_path = None
     try:
