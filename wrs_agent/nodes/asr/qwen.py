@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from importlib.util import find_spec
 
-from wrs_agent.nodes.asr.capture import CAPTURE_SECONDS, record_push_to_talk
+from wrs_agent.nodes.asr.capture import CAPTURE_SECONDS, choose_input_device, record_push_to_talk
 from wrs_agent.nodes.model_assets import ROOT, model_directory, offline_cuda
 
 
@@ -71,9 +71,14 @@ def make_qwen_capture(*, vocabulary=(), max_seconds=CAPTURE_SECONDS):
     """Load the resident recognizer once, then capture and transcribe one press at a time."""
     recognizer = QwenASR(vocabulary=vocabulary)
     recognizer.warmup()
+    device = choose_input_device()
+    import sounddevice as sd
+
+    name = sd.query_devices(device, "input")["name"] if device is not None else "default"
+    print(f"asr input: {name}", flush=True)
 
     def capture(held):
-        audio = record_push_to_talk(held, max_seconds=max_seconds)
+        audio = record_push_to_talk(held, max_seconds=max_seconds, device=device)
         return None if audio is None else recognizer.transcribe(audio).text.strip() or None
 
     return capture

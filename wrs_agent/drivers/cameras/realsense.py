@@ -61,7 +61,8 @@ class RealSenseCamera:
     def read(self):
         if self.pipeline is None:
             raise RuntimeError("camera_not_open")
-        frames = self.align.process(self.pipeline.wait_for_frames(1000))
+        # This D405 on USB 2.1 delivers the first frame after about 1.1 s.
+        frames = self.align.process(self.pipeline.wait_for_frames(5000))
         captured = time.time_ns()
         depth, color = frames.get_depth_frame(), frames.get_color_frame()
         if not depth or not color:

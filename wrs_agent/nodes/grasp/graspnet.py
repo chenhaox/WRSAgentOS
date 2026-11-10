@@ -12,19 +12,56 @@ from wrs_agent.nodes.grasp.data import GraspCandidate
 from wrs_agent.nodes.vision.artifacts import checkpoint_path
 
 
-def sample_scene(points, mask, *, count=20000):
-    """Sample the full scene and carry each point's original pixel ROI membership."""
+# Local context for an approach, not the rest of the room. GraspNet's farthest-point
+# seeds otherwise land on distant walls before they ever reach a small object.
+TARGET_MARGIN_M = 0.10
+# A loose mask often includes the wall behind the object. Those points are a separate
+# surface, and GraspNet's object/background score then rejects every seed on the mask.
+FOREGROUND_GAP_M = 0.05
+
+
+def foreground_target(points, target, *, gap_m=FOREGROUND_GAP_M):
+    """Keep the nearer surface when the mask also covers a wall behind it."""
+    if not np.isfinite(gap_m) or gap_m <= 0:
+        raise ValueError("invalid_foreground_gap")
+    chosen = points[target, 2]
+    if chosen.size < 64:
+        return target
+    ordered = np.sort(chosen)
+    body = ordered[int(ordered.size * 0.02):]
+    if body.size < 64:
+        return target
+    gaps = np.diff(body)
+    cut = int(np.argmax(gaps))
+    if gaps[cut] < gap_m:
+        return target
+    near = (points[:, :, 2] >= body[0]) & (points[:, :, 2] <= body[cut])
+    return target & near
+
+
+def sample_scene(points, mask, *, count=20000, margin_m=TARGET_MARGIN_M):
+    """Sample the target surface and nearby points, keeping each point's ROI bit."""
+    if not np.isfinite(margin_m) or margin_m < 0:
+        raise ValueError("invalid_grasp_margin")
     valid = np.isfinite(points).all(axis=2) & (points[:, :, 2] > 0)
-    if np.count_nonzero(valid & mask) < 64:
+    target = valid & mask
+    if np.count_nonzero(target) < 64:
         raise ValueError("insufficient_target_depth")
-    pixels = np.flatnonzero(valid)
+    target = foreground_target(points, target)
+    if np.count_nonzero(target) < 64:
+        raise ValueError("insufficient_target_depth")
+    low = points[target].min(axis=0) - margin_m
+    high = points[target].max(axis=0) + margin_m
+    flat = points.reshape(-1, 3)
+    near = valid.ravel() & (flat >= low).all(axis=1) & (flat <= high).all(axis=1)
+    pixels = np.flatnonzero(near)
     rng = np.random.default_rng(0)  # Stable sampling; GPU inference may still vary.
     if len(pixels) >= count:
         pixels = rng.choice(pixels, count, replace=False)
     else:
         pixels = np.concatenate((pixels, rng.choice(pixels, count - len(pixels), replace=True)))
     cloud = np.ascontiguousarray(points.reshape(-1, 3)[pixels], dtype=np.float32)
-    return cloud, mask.ravel()[pixels]
+    return cloud, target.ravel()[pixels]
 
 
 def target_rows(rows, cloud, roi, seed_indices, objectness):

@@ -93,7 +93,7 @@ def main():
                 result.update(grasp_input=str(selected), valid_target_points=int(valid.sum()),
                               sampled_points=len(cloud),
                               sampled_target_points=int(sampled_roi.sum()),
-                              network_input="full_scene", depth_range_m=[
+                              network_input="target_neighborhood", depth_range_m=[
                                   float(points[valid, 2].min()), float(points[valid, 2].max()),
                               ])
         result["seconds"] = time.perf_counter() - began

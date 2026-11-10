@@ -11,11 +11,15 @@ from wrs_agent.schemas import Boundary, Name
 
 
 class WrsOptions(Boundary):
-    backend: Literal["mock", "wrs", "wrs-grasp"] = "mock"
+    backend: Literal["mock", "wrs", "wrs-grasp", "fafu"] = "mock"
     duration: Duration = 0.4
     scene: Path | None = Field(default=None, strict=False)
     grasp_calibration: Path | None = Field(default=None, strict=False)
     grasp_node: Name = "graspnet"
+    sdk_root: Path | None = Field(default=None, strict=False)
+    cfg_path: Path | None = Field(default=None, strict=False)
+    port: str = Field(default="auto", min_length=1, max_length=80)
+    allow_hardware: bool = False
     fault: (
         Literal[
             "grasp",
@@ -39,8 +43,23 @@ class WrsOptions(Boundary):
             load_scene(self.scene)
         if self.backend == "wrs-grasp" and (self.scene is None or self.grasp_calibration is None):
             raise ValueError("visual_grasp_requires_scene_and_calibration")
-        if self.grasp_calibration is not None and self.backend != "wrs-grasp":
+        if self.grasp_calibration is not None and self.backend not in {"wrs-grasp", "fafu"}:
             raise ValueError("grasp_calibration_requires_visual_backend")
+        if self.backend == "fafu" and self.grasp_calibration is not None:
+            from wrs_agent.env.fixed_camera import load_calibration
+
+            if load_calibration(self.grasp_calibration).source != "measured":
+                raise ValueError("fafu_hand_eye_requires_measured_calibration")
+        if self.backend != "fafu" and (self.sdk_root is not None or self.cfg_path is not None
+                                        or self.allow_hardware or self.port != "auto"):
+            raise ValueError("fafu_options_require_fafu_backend")
+        if self.backend == "fafu" and self.allow_hardware:
+            root = self.sdk_root
+            if root is None or not (root / "fafu_robot_python" / "fafu_robot_controller.py").is_file():
+                raise ValueError("fafu_sdk_not_found")
+            cfg = self.cfg_path or root / "fafu_robot_python" / "robot.cfg"
+            if not cfg.is_file():
+                raise ValueError("fafu_config_not_found")
         return self
 
 
@@ -57,7 +76,32 @@ class WrsNode(Node):
 
     async def setup(self):
         options = self.options
-        if options.backend == "wrs-grasp":
+        switch_mode = None
+        if options.backend == "fafu":
+            from wrs_agent.env.fafu import make_fafu_environment
+
+            read_grasps_fn = None
+            if options.grasp_calibration is not None:
+                from wrs_agent.nodes.grasp.data import read_grasps
+
+                self.discover()
+
+                async def read_grasps_fn(candidate_set_id, task_id):
+                    await self.registry.refresh([options.grasp_node])
+                    return await read_grasps(
+                        self.connect(options.grasp_node), candidate_set_id, task_id,
+                    )
+
+            executor, switch_mode = await make_fafu_environment(
+                self.journal,
+                sdk_root=options.sdk_root,
+                cfg_path=options.cfg_path,
+                port=options.port,
+                allow_hardware=options.allow_hardware,
+                calibration_path=options.grasp_calibration,
+                read_grasps=read_grasps_fn,
+            )
+        elif options.backend == "wrs-grasp":
             from wrs_agent.env.wrs_grasp import make_visual_environment
             from wrs_agent.nodes.grasp.data import read_grasps
 
@@ -90,3 +134,5 @@ class WrsNode(Node):
                 fault=options.fault,
             )
         self.actions(executor)
+        if switch_mode is not None:
+            self.transport.register_handler("request/robot/mode", switch_mode)
