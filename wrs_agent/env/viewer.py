@@ -10,12 +10,12 @@ from wrs_agent.env.wrs import serve_viewer_hub
 
 
 @contextmanager
-def viewer_hub(port):
+def viewer_hub(port, *, layout_scene=None):
     """Serve a WRS page for this context only; refuse an already occupied port."""
     stopped, ready = threading.Event(), Future()
 
     async def run():
-        serving = asyncio.create_task(serve_viewer_hub(port))
+        serving = asyncio.create_task(serve_viewer_hub(port, layout_scene=layout_scene))
         try:
             # Binding errors must be reported before displaying a ready URL.
             await asyncio.sleep(0.1)

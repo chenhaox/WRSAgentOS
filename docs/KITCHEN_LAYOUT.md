@@ -1,10 +1,21 @@
 # 厨具的位置和朝向怎么改
 
-日常临时调整请运行 `10_edit_kitchen.py`。它只修改本次运行副本，**重启 05 后恢复默认**；默认文件 `wrs_agent/assets/kitchen/layout.toml` 保持不变。不需要改 Python 或 STL。
+日常临时调整可以直接使用 **07 仿真网页右上角的“厨具摆放”面板**，也可以运行 `10_edit_kitchen.py`。两者都只修改本次运行副本，**重启 05 后恢复默认**；默认文件 `wrs_agent/assets/kitchen/layout.toml` 保持不变。不需要改 Python 或 STL。
 
-`scene.toml` 负责“放什么模型、什么颜色”；`layout.toml` 负责“放在哪里、朝哪个方向”。05 启动时把这两个默认文件复制到 `.local/kitchen-preview/run-*/`，之后只操作运行副本。15 静态预览仍直接读取默认文件。
+`scene.toml` 负责“放什么模型、什么颜色”；`layout.toml` 负责“放在哪里、朝哪个方向”。05 启动时把这两个默认文件复制到 `.local/kitchen-preview/run-*/`，之后只操作运行副本。`09_imported_kitchen.py` 静态预览仍直接读取默认文件。
 
-## 先用终端编辑器：不用直接改 TOML
+## 推荐：在网页上调整摆放
+
+05 和 07 都在运行时，浏览器打开 **http://127.0.0.1:8000**，右上角是“厨具摆放”：
+
+1. 下拉框选择厨具。
+2. 位置用 X / Y / Z，单位米，输入后按 Enter 或移开焦点提交。
+3. 按住绿色摇杆拖动，左右是绕 X 的角度，上下是绕 Y；按住蓝色旋钮沿圆周拖动是绕 Z。也可以直接填三个角度。
+4. “恢复所选默认”只把当前物体放回默认摆放。
+
+修改会自动提交。05 空闲时大约 1 秒内读到，07 的三维场景跟着更新。面板可以收起。网页和 `10_edit_kitchen.py` 共用同一次运行副本；两边同时改时，过期的那次会被拒绝。关闭网页不会还原；重新启动 05 才恢复默认，并且要重新运行 07。
+
+## 也可以用终端编辑器
 
 第一次更新到包含编辑器的代码后，先关闭旧的 05/07，再按下面启动。以后只改摆放时，不用再重启它们。每个终端都要先激活 `wrs` 环境并进入项目根目录。
 
@@ -176,6 +187,9 @@ cd "D:\WRSAgentOS\WRSAgentOS-latest"
 | `wrs_agent/scene.py` | 原有场景加载入口，现在会自动读取关联的 layout |
 | `examples/wrs/10_edit_kitchen.py` | 终端编辑入口，可直接运行 |
 | `wrs_agent/layout_editor.py` | 列出厨具、读取输入、校验并写入运行副本 |
+| `wrs_agent/env/layout_web.py` | 复用 07 的网页服务，校验网页请求并写入同一次运行副本 |
+| `wrs_agent/assets/kitchen_editor/editor.js` | 厨具选择、数字输入、X/Y 摇杆、Z 旋钮 |
+| `wrs_agent/assets/kitchen_editor/editor.css` | 网页编辑面板的样式 |
 | `wrs_agent/layout_session.py` | 05 创建新副本、标记当前场景、退出时清理 |
 | `.local/kitchen-preview/run-*/` | 本次摆放副本；退出清理，重启从默认值开始，不提交 Git |
 | `wrs_agent/scene_reload.py` | 05 虚拟节点自动读取摆放；出错时保留原场景 |
