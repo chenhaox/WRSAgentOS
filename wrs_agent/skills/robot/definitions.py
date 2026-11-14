@@ -10,7 +10,7 @@ from wrs_agent.skills.contracts import Skill
 
 
 class MoveArgs(Boundary):
-    pose: Literal["home", "B", "C"]
+    pose: Literal["home", "zero", "B", "C"]
 
 
 class RelativeMoveArgs(Boundary):
@@ -34,8 +34,98 @@ class PickArgs(Boundary):
     object: Name
 
 
+class ShakeOffArgs(PickArgs):
+    times: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        title="次数",
+        description="左右来回抖几次；物体仍留在夹爪里",
+    )
+
+
+class ShakeOffArgs(PickArgs):
+    times: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        title="次数",
+        description="左右来回抖几次；物体仍留在夹爪里",
+    )
+
+
+class ShakeOffArgs(PickArgs):
+    times: int = Field(
+        default=3, ge=1, le=8, title="次数",
+        description="左右来回抖几次；物体仍留在夹爪里",
+    )
+
+
 class PlaceArgs(PickArgs):
     target: Literal["B", "C"]
+
+
+def _distinct(*values):
+    if len(set(values)) != len(values):
+        raise ValueError("objects_must_be_distinct")
+
+
+class ReorientArgs(PickArgs):
+    orientation: Literal["upright", "upside_down"]
+
+
+class PlaceOnArgs(PickArgs):
+    surface: Name
+
+    @model_validator(mode="after")
+    def distinct_objects(self):
+        _distinct(self.object, self.surface)
+        return self
+
+
+class SeatInArgs(PickArgs):
+    container: Name
+
+    @model_validator(mode="after")
+    def distinct_objects(self):
+        _distinct(self.object, self.container)
+        return self
+
+
+class ControlArgs(Boundary):
+    appliance: Name
+    state: Literal["on", "off"]
+
+
+class PourArgs(Boundary):
+    source: Name
+    target: Name
+
+    @model_validator(mode="after")
+    def distinct_objects(self):
+        _distinct(self.source, self.target)
+        return self
+
+
+class StirArgs(Boundary):
+    tool: Name
+    vessel: Name
+
+    @model_validator(mode="after")
+    def distinct_objects(self):
+        _distinct(self.tool, self.vessel)
+        return self
+
+
+class ScoopArgs(Boundary):
+    tool: Name
+    source: Name
+    target: Name
+
+    @model_validator(mode="after")
+    def distinct_objects(self):
+        _distinct(self.tool, self.source, self.target)
+        return self
 
 
 _GUIDE = files(__package__).joinpath("SKILL.md").read_text(encoding="utf-8")
@@ -49,6 +139,7 @@ def _skill(
     preconditions=(),
     recovery=(),
     verification="virtual_world_postcondition",
+    timeout=10.0,
 ):
     return Skill(
         name=name,
@@ -58,6 +149,7 @@ def _skill(
         preconditions=preconditions,
         recovery=recovery,
         verification=verification,
+        timeout=timeout,
         arguments=arguments,
     )
 
@@ -73,7 +165,9 @@ SKILLS = {
         _skill(
             "move_named_pose",
             MoveArgs,
-            "Move to a validated named joint pose",
+            "Move to a validated named joint pose. Manipulation skills plan their own "
+            "approach from wherever the arm is, so do not insert it between them; use it "
+            "only when the user asks for that pose",
             preconditions=("known_pose",),
         ),
         _skill(
@@ -95,7 +189,9 @@ SKILLS = {
         _skill(
             "pick",
             PickArgs,
-            "Acquire an observed object and verify holding",
+            "Acquire an observed object and verify holding. A loose piece inside a "
+            "container has no handle: do not pick it; pick that container and pour it. "
+            "A container seated inside another is picked by its own handle",
             preconditions=("empty_gripper", "object_visible"),
             recovery=("observe_once",),
         ),
@@ -109,6 +205,68 @@ SKILLS = {
             "verify",
             PlaceArgs,
             "Confirm object placement and empty gripper",
+        ),
+        _skill(
+            "reorient",
+            ReorientArgs,
+            "Turn the held object until its opening faces up (upright) or down; succeeds "
+            "at once if it already has that orientation. The object stays in the gripper",
+            preconditions=("object_held", "regrasp_clearance"),
+            timeout=20.0,
+        ),
+        _skill(
+            "place_on",
+            PlaceOnArgs,
+            "Set the held object down resting on an observed surface (table, plate, "
+            "cooktop) and release it; for the inside of a container use seat_in",
+            preconditions=("object_held", "surface_visible"),
+        ),
+        _skill(
+            "seat_in",
+            SeatInArgs,
+            "Lower the held object through an observed container's opening and release it "
+            "inside, not on the rim: strainer into pot, noodles into strainer, lid onto pot",
+            preconditions=("object_held", "container_visible", "container_upright"),
+        ),
+        _skill(
+            "set_control",
+            ControlArgs,
+            "Switch an observed appliance such as a cooktop on or off with its control; "
+            "succeeds only when the appliance reports the requested state",
+            preconditions=("appliance_visible", "empty_gripper"),
+        ),
+        _skill(
+            "pour",
+            PourArgs,
+            "Carry the held container above the observed target and tilt its opening past "
+            "horizontal. One pour empties every object inside it together, then returns "
+            "the container upright and still held. The source is the container, never a piece",
+            preconditions=("source_held", "target_visible"),
+            timeout=30.0,
+        ),
+        _skill(
+            "stir",
+            StirArgs,
+            "Lower the held tool through the observed vessel's opening and circle inside "
+            "it, then lift it out; the tool stays in the gripper",
+            preconditions=("tool_held", "vessel_visible"),
+            timeout=60.0,
+        ),
+        _skill(
+            "scoop",
+            ScoopArgs,
+            "Dip the held tool into the source, sweep and lift one portion, then tilt it "
+            "over the target to release it; the tool stays in the gripper",
+            preconditions=("tool_held", "source_visible", "target_visible"),
+            timeout=30.0,
+        ),
+        _skill(
+            "shake_off",
+            ShakeOffArgs,
+            "Lift the held strainer and shake it side to side to drain it; it stays held. "
+            "times is how many left-right cycles, default 3",
+            preconditions=("object_held",),
+            timeout=45.0,
         ),
     )
 }

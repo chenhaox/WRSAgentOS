@@ -100,7 +100,9 @@ class Envelope(Boundary):
 def encode(value: dict | Boundary) -> bytes:
     if isinstance(value, Boundary):
         value = value.model_dump(mode="json")
-    result = json.dumps(value, allow_nan=False, separators=(",", ":")).encode()
+    result = json.dumps(
+        value, allow_nan=False, separators=(",", ":"), ensure_ascii=False,
+    ).encode()
     if len(result) > MAX_BYTES:
         raise ValueError("payload_too_large")
     return result
@@ -221,17 +223,39 @@ class BoxGeometry(Boundary):
     ]
 
 
+class MeshGeometry(Boundary):
+    kind: Literal["mesh"] = "mesh"
+    asset: str = Field(min_length=1, max_length=240, pattern=r"^[A-Za-z0-9_./-]+\.stl$")
+
+    @model_validator(mode="after")
+    def relative_asset(self):
+        if self.asset.startswith("/") or any(p in ("", ".", "..") for p in self.asset.split("/")):
+            raise ValueError("mesh_asset_must_be_relative")
+        return self
+
+
+# ObjectData fields that change as objects move; the rest is configuration.
+PLACEMENT_FIELDS = frozenset({"pos", "rotmat", "inside", "resting_on"})
+
+
 class ObjectData(Boundary):
     """One identified object; absent pose/geometry means unknown, never identity."""
 
     label: str = Field(default="", max_length=80)
     pos: Vector3 | None = None
     rotmat: Rotation3 | None = None
-    geometry: BoxGeometry | None = None
+    geometry: BoxGeometry | MeshGeometry | None = None
+    alpha: float = Field(default=1.0, ge=0, le=1)
     rgb: Annotated[
         list[Annotated[float, Field(ge=0, le=1)]], Field(min_length=3, max_length=3)
     ] = Field(default_factory=lambda: [0.6, 0.6, 0.6])
     location: Name | None = None  # Symbolic location used by Mock pick/place.
+    # Relations a backend derives from its own model; None means not reported.
+    # container has an opening (seat_in target, can be poured); solid is a stand or surface.
+    shape: Literal["container", "solid"] | None = None
+    inside: Name | None = None  # Container currently holding this object.
+    resting_on: Name | None = None  # Stand or surface under it, when not inside one.
+    home: Name | None = None  # Where it started; the target of "put it back".
     source: Name
     observed_at_ns: int | None = Field(default=None, gt=0)
     valid: bool = True
@@ -326,7 +350,7 @@ class FeatureSnapshot(Boundary):
 
 class NodeInfo(Boundary):
     node_id: Name
-    node_type: Literal["agent", "wrs", "tts", "voice", "asr", "camera", "vision", "custom"]
+    node_type: Literal["agent", "wrs", "tts", "voice", "asr", "camera", "vision", "ui", "custom"]
     target: Name | None = None
     actions: bool = False
     robot_controls: bool = False

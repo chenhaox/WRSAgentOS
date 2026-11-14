@@ -40,6 +40,12 @@ async def main():
     parser.add_argument("--asr-vocabulary", action="append")
     parser.add_argument("--duration", type=float)
     parser.add_argument("--fault")
+    parser.add_argument("--ui-port", type=int, help="Dashboard port of the ui node (8010)")
+    parser.add_argument(
+        "--ui-viewer", action=argparse.BooleanOptionalAction, default=None,
+        help="Let the ui node host the WRS 3D page itself (default on)",
+    )
+    parser.add_argument("--ui-viewer-port", type=int, help="WRS 3D page port (8000)")
     args = parser.parse_args()
     values = vars(args)
     for name in ("peers", "skill_bindings"):

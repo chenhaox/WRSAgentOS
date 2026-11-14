@@ -32,8 +32,13 @@ async def test_real_wrs_progress_query_completion_and_unsupported():
         cap = await node.features()
         assert cap.backend == "wrs" and cap.verification == "wrs_fk"
         assert not cap.hardware and not cap.controller_flush
-        assert "pick" in cap.unsupported and "pick" not in cap.skills
-        assert not (await submit_request(node, await request_for(node, skill="pick"))).accepted
+        # No scene: nothing to grasp, so pick/place_on stay unsupported.
+        unbound = {"pick", "place", "reorient", "place_on", "seat_in", "set_control", "pour",
+                   "stir", "scoop", "shake_off"}
+        assert unbound <= set(cap.unsupported) and not unbound & set(cap.skills)
+        assert not (
+            await submit_request(node, await request_for(node, skill="shake_off"))
+        ).accepted
         request = await request_for(node, revision=2)
         subscriber = stack.system.clients["wrs"].transport.subscribe("events/action", capacity=64)
         receipt = await submit_request(node, request)
@@ -127,7 +132,7 @@ async def test_unsupported_wrs_step_prevents_partial_tts_side_effect():
         plan = Plan(
             steps=[
                 Step(step_id="say", skill="speak", args={"text": "starting"}),
-                Step(step_id="pick", skill="pick", args={"object": "A"}),
+                Step(step_id="drain", skill="shake_off", args={"object": "A"}),
             ]
         )
         await stack.system.clients["wrs"].transport.request(
@@ -165,6 +170,88 @@ async def test_gripper_open_close_is_read_back_and_cancellable():
         assert 0.0 < stopped.gripper_width < 0.05
         await asyncio.sleep(0.2)
         assert (await system.snapshot()).data.robot.kinematics == stopped
+
+
+async def test_pick_and_place_on_move_the_named_box_and_track_holding():
+    from wrs_agent.processes import ROOT
+
+    async with LocalStack(
+        backend="wrs", duration=0.2, scene=ROOT / "examples/wrs/scene.toml"
+    ) as stack:
+        system = stack.system
+        cap = await system.clients["wrs"].features()
+        assert {"pick", "place_on"} <= set(cap.skills)
+        assert not {"pick", "place_on"} & set(cap.unsupported) and "place" in cap.unsupported
+        start = (await system.snapshot()).data.objects["A"].pos
+        assert (await (await system.action("place_on", object="A", surface="plate")).wait()
+                ).reason == "object_not_held"
+        too_wide = await (await system.action("pick", object="plate")).wait()
+        assert too_wide.state == "FAILED" and too_wide.reason == "object_exceeds_dh50_opening"
+
+        picked = await (await system.action("pick", object="A")).wait(timeout=20)
+        assert picked.state == "SUCCEEDED" and picked.verification == "PASS"
+        scene = (await system.snapshot()).data
+        assert scene.robot.held_object == "A" and scene.robot.pose is None
+        assert scene.objects["A"].pos[2] == pytest.approx(start[2] + 0.08, abs=0.005)
+        assert scene.robot.kinematics.gripper_width < 0.05
+        jaw = await (await system.action("set_gripper", command="open")).wait()
+        assert jaw.state == "FAILED" and jaw.reason == "object_held"
+        carried = await (await system.action("move_relative", dz=0.02)).wait()
+        assert carried.state == "SUCCEEDED"
+        lifted = (await system.snapshot()).data.objects["A"].pos[2]
+        assert lifted == pytest.approx(scene.objects["A"].pos[2] + 0.02, abs=1e-3)
+
+        placed = await (await system.action("place_on", object="A", surface="plate")).wait(
+            timeout=20
+        )
+        assert placed.state == "SUCCEEDED" and placed.verification == "PASS"
+        scene = (await system.snapshot()).data
+        plate = scene.objects["plate"]
+        assert scene.robot.held_object is None
+        assert scene.robot.kinematics.gripper_width == pytest.approx(0.05)
+        # Resting 1 mm above the plate top, centered on it.
+        assert scene.objects["A"].pos == pytest.approx(
+            [plate.pos[0], plate.pos[1], plate.pos[2] + 0.005 + 0.001 + 0.02], abs=1e-6
+        )
+        repeat = await (await system.action("place_on", object="A", surface="table")).wait()
+        assert repeat.reason == "object_not_held"
+
+        # The next pick starts from the plate, not from the configured position.
+        on_plate = scene.objects["A"].pos
+        again = await (await system.action("pick", object="A")).wait(timeout=20)
+        assert again.state == "SUCCEEDED"
+        lifted = (await system.snapshot()).data.objects["A"].pos
+        assert lifted == pytest.approx([on_plate[0], on_plate[1], on_plate[2] + 0.08], abs=1e-3)
+        back = await (await system.action("place_on", object="A", surface="table")).wait(
+            timeout=20
+        )
+        assert back.state == "SUCCEEDED"
+        table = scene.objects["table"]
+        assert (await system.snapshot()).data.objects["A"].pos == pytest.approx(
+            [table.pos[0], table.pos[1], table.pos[2] + 0.03 + 0.001 + 0.02], abs=1e-6
+        )
+
+
+async def test_cancelled_pick_stops_with_consistent_holding_state():
+    from wrs_agent.processes import ROOT
+
+    async with LocalStack(
+        backend="wrs", duration=0.2, scene=ROOT / "examples/wrs/scene.toml"
+    ) as stack:
+        system = stack.system
+        start = (await system.snapshot()).data.objects["A"].pos
+        picking = await system.action("pick", object="A")
+        await eventually(picking.status, lambda s: s.progress > 0.9, timeout=20)
+        assert (await picking.cancel()).accepted
+        assert (await picking.wait()).state == "CANCELLED"
+        stopped = await eventually(system.snapshot, lambda s: s.stop_confirmed)
+        await asyncio.sleep(0.2)
+        after = await system.snapshot()
+        assert after.data.robot.kinematics == stopped.data.robot.kinematics
+        assert after.data.objects["A"] == stopped.data.objects["A"]
+        # Cancelled during the lift: the box is held and has left the table.
+        assert after.data.robot.held_object == "A"
+        assert after.data.objects["A"].pos[2] > start[2]
 
 
 async def test_relative_motion_uses_actual_ik_fk_and_stops_at_task_boundary():

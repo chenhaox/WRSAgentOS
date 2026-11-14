@@ -1,0 +1,104 @@
+# 默认厨具摆放：05 每次启动从此文件生成新副本；16 编辑器只改本次副本。
+# pos = [X, Y, Z]，单位：米。0.01 米 = 1 厘米。
+# 世界坐标：+X 为机械臂前方，+Y 为左侧，-Y 为右侧，+Z 为上方。
+# rpy_deg = [绕X轴, 绕Y轴, 绕Z轴]，单位：度；平放转向通常只改第三个值。
+# 正方向按右手定则；绕 +Z 的正转，从上往下看是逆时针。
+# 组合规则：R = Rz(yaw) * Ry(pitch) * Rx(roll)，相对于父物体坐标系。
+# 没写 parent：pos/rpy_deg 相对世界坐标；写了 parent：相对该物体。
+# 移动或旋转父物体，其子物体会整体跟随。parent 不表示物理接触或真实抓取。
+# 临时修改后刷新 07 的 8000 页面可查看；重启 05 恢复本文件中的默认值。
+# 原有 STL 的尺寸、颜色、透明度仍在同目录 scene.toml 中。
+
+# 工作台
+[objects.table]
+pos = [0.35, 0, -0.03]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 电磁炉
+[objects.induction_cooker]
+pos = [0.02, -0.29, 0.0]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 大锅
+[objects.pot]
+parent = "induction_cooker"
+pos = [0.0, 0.0, 0.0450001359]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 大锅盖
+[objects.pot_lid]
+pos = [0.75, -0.35, 0]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 量杯
+[objects.measuring_cup]
+pos = [0.69, -0.12, 0]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 漏勺：STL 已立起并以模型中心为原点；只改角度时中心不移动。
+[objects.skimmer]
+parent = "skimmer_holder"
+pos = [-0.005499999970, 0.000000005588, 0.207376252909]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 盘子
+[objects.plate]
+pos = [0.65, 0.16, 0]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 盘上长方体
+[objects.plate_block]
+parent = "plate"
+pos = [0.0, 0.0, 0.022000088692]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 捞网架
+[objects.skimmer_holder]
+pos = [0.05, 0.36, 0]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 碗与支架是两件。把手在模型 +X，转 180° 后朝向机械臂，夹爪抓把手。
+[objects.bowl_support]
+parent = "bowl_rack"
+pos = [0.0, 0.0, 0.040010002831]
+rpy_deg = [0.0, 0.0, 180.0]
+
+# 碗架
+[objects.bowl_rack]
+pos = [0.36, -0.12, 0]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 第二只碗同样把把手转到朝向机械臂的一侧。
+[objects.bowl_support_2]
+parent = "bowl_rack_2"
+pos = [0.0, 0.0, 0.040010002831]
+rpy_deg = [0.0, 0.0, 180.0]
+
+# 碗架（第二套）
+[objects.bowl_rack_2]
+pos = [0.36, 0.19, 0]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 淡黄色食物块1
+[objects.bowl_food_1]
+parent = "bowl_support_2"
+pos = [-0.02, -0.014, 0.020026966143]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 淡黄色食物块2
+[objects.bowl_food_2]
+parent = "bowl_support_2"
+pos = [0.02, -0.014, 0.020026981044]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 淡黄色食物块3
+[objects.bowl_food_3]
+parent = "bowl_support_2"
+pos = [-0.02, 0.014, 0.020026981044]
+rpy_deg = [0.0, 0.0, 0.0]
+
+# 淡黄色食物块4
+[objects.bowl_food_4]
+parent = "bowl_support_2"
+pos = [0.02, 0.014, 0.020026966143]
+rpy_deg = [0.0, 0.0, 0.0]

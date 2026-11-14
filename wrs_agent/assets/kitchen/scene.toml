@@ -1,0 +1,117 @@
+# 模型、颜色、尺寸配置；位置和朝向请编辑同目录 layout.toml。
+layout = "layout.toml"
+frame_id = "world"
+
+[objects.table]
+source = "configuration"
+label = "工作台"
+rgb = [0.42, 0.28, 0.17]
+geometry = { kind = "box", xyz_lengths = [1.1, 1, 0.06] }
+
+[objects.induction_cooker]
+source = "configuration"
+label = "电磁炉"
+rgb = [0.78, 0.79, 0.8]
+alpha = 1.0
+geometry = { kind = "mesh", asset = "kitchen/meshes/induction_cooker.stl" }
+
+[objects.pot]
+source = "configuration"
+label = "大锅"
+rgb = [0.55, 0.59, 0.63]
+alpha = 1.0
+geometry = { kind = "mesh", asset = "kitchen/meshes/large_pot.stl" }
+
+[objects.pot_lid]
+source = "configuration"
+label = "大锅盖"
+rgb = [0.55, 0.59, 0.63]
+alpha = 1.0
+geometry = { kind = "mesh", asset = "kitchen/meshes/large_pot_lid.stl" }
+
+[objects.measuring_cup]
+source = "configuration"
+label = "量杯"
+rgb = [0.8, 0.81, 0.82]
+alpha = 0.28
+geometry = { kind = "mesh", asset = "kitchen/meshes/measuring_cup.stl" }
+
+[objects.skimmer]
+source = "configuration"
+label = "漏勺"
+rgb = [0.58, 0.63, 0.68]
+alpha = 1.0
+geometry = { kind = "mesh", asset = "kitchen/meshes/skimmer.stl" }
+
+[objects.plate]
+source = "configuration"
+label = "盘子"
+rgb = [0.84, 0.85, 0.87]
+alpha = 1.0
+geometry = { kind = "mesh", asset = "kitchen/meshes/plate.stl" }
+
+[objects.plate_block]
+source = "configuration"
+label = "盘上长方体"
+rgb = [0.92, 0.92, 0.88]
+alpha = 1.0
+geometry = { kind = "mesh", asset = "kitchen/meshes/plate_block.stl" }
+
+[objects.skimmer_holder]
+source = "configuration"
+label = "捞网架"
+rgb = [0.55, 0.59, 0.63]
+alpha = 1.0
+geometry = { kind = "mesh", asset = "kitchen/meshes/skimmer_holder.stl" }
+
+[objects.bowl_support]
+source = "configuration"
+label = "碗与支架整体"
+rgb = [0.55, 0.59, 0.63]
+alpha = 1.0
+geometry = { kind = "mesh", asset = "kitchen/meshes/bowl_support.stl" }
+
+[objects.bowl_rack]
+source = "configuration"
+label = "碗架"
+rgb = [0.55, 0.59, 0.63]
+alpha = 1.0
+geometry = { kind = "mesh", asset = "kitchen/meshes/bowl_rack.stl" }
+
+[objects.bowl_support_2]
+source = "configuration"
+label = "碗与支架整体（第二套）"
+rgb = [0.55, 0.59, 0.63]
+alpha = 1.0
+geometry = { kind = "mesh", asset = "kitchen/meshes/bowl_support.stl" }
+
+[objects.bowl_rack_2]
+source = "configuration"
+label = "碗架（第二套）"
+rgb = [0.55, 0.59, 0.63]
+alpha = 1.0
+geometry = { kind = "mesh", asset = "kitchen/meshes/bowl_rack.stl" }
+
+[objects.bowl_food_1]
+source = "configuration"
+label = "淡黄色食物块1"
+rgb = [0.95, 0.82, 0.42]
+geometry = { kind = "box", xyz_lengths = [0.032, 0.018, 0.022] }
+
+[objects.bowl_food_2]
+source = "configuration"
+label = "淡黄色食物块2"
+rgb = [0.95, 0.82, 0.42]
+geometry = { kind = "box", xyz_lengths = [0.032, 0.018, 0.022] }
+
+[objects.bowl_food_3]
+source = "configuration"
+label = "淡黄色食物块3"
+rgb = [0.95, 0.82, 0.42]
+geometry = { kind = "box", xyz_lengths = [0.032, 0.018, 0.022] }
+
+[objects.bowl_food_4]
+source = "configuration"
+label = "淡黄色食物块4"
+rgb = [0.95, 0.82, 0.42]
+geometry = { kind = "box", xyz_lengths = [0.032, 0.018, 0.022] }

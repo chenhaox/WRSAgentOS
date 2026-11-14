@@ -1,0 +1,18 @@
+[nodes.wrs]
+type = "wrs"
+suffix = ""
+actions = true
+enabled = true
+
+[nodes.agent]
+type = "agent"
+suffix = ""
+actions = false
+enabled = true
+
+# 看板也是一个节点：只发现其他节点并转发请求，不持有机器人或模型。
+[nodes.ui]
+type = "ui"
+suffix = "-ui"
+actions = false
+enabled = true

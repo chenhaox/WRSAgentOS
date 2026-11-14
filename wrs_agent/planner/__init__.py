@@ -14,6 +14,9 @@ class PlanRequest(Boundary):
     user_goal: str = Field(min_length=1, max_length=1024)
     world: dict
     skills: list[dict]
+    # Earlier goals of this Agent, oldest first, with what ran and how it ended.
+    # Context only: the world snapshot remains the authority on current state.
+    history: list[dict] = Field(default_factory=list, max_length=8)
 
 
 class PlanDecision(Boundary):
@@ -67,11 +70,11 @@ class ModelPlanner:
         self.last_timing = None
         self.last_usage = {}
         started = time.perf_counter()
+        context = {"world": request.world, "skills": request.skills}
+        if request.history:
+            context["recent_turns"] = request.history
         reply = await self.client.complete(
-            ModelRequest(
-                goal=request.user_goal,
-                context={"world": request.world, "skills": request.skills},
-            )
+            ModelRequest(goal=request.user_goal, context=context)
         )
         if reply.finish != "complete":
             raise ValueError("incomplete_model_reply")

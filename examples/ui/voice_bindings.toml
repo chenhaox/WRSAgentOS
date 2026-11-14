@@ -1,0 +1,36 @@
+[nodes.wrs]
+type = "wrs"
+suffix = ""
+actions = true
+enabled = true
+
+[nodes.tts]
+type = "tts"
+suffix = "-tts"
+actions = true
+enabled = true
+
+[nodes.agent]
+type = "agent"
+suffix = ""
+actions = false
+enabled = true
+
+[nodes.voice]
+type = "voice"
+suffix = "-voice"
+actions = false
+enabled = true
+
+# 只在按住“按住说话”时占用麦克风；识别结果只回给按下按钮的 UI 节点。
+[nodes.asr]
+type = "asr"
+suffix = "-asr"
+actions = false
+enabled = true
+
+[nodes.ui]
+type = "ui"
+suffix = "-ui"
+actions = false
+enabled = true

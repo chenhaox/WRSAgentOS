@@ -111,6 +111,7 @@ class Runtime:
         self.recoveries = 0
         self.recovered_task = None
         self.action_history = deque(maxlen=128)
+        self.turns = deque(maxlen=6)
 
     @property
     def task_id(self):
@@ -404,6 +405,7 @@ class Runtime:
 
     async def _plan(self, goal, request_id, was_running):
         worlds, clients = {}, {}
+        decision = task = None
         started = time.perf_counter()
         self.planning.timing = {}
         try:
@@ -418,6 +420,7 @@ class Runtime:
                 user_goal=goal,
                 world={n: w.model_dump(exclude={"lease_id"}) for n, w in worlds.items()},
                 skills=[spec.model_dump() for spec in lookup_skills(features, routes)],
+                history=list(self.turns),
             )
             cached = self.cache.lookup(goal, worlds, features, routes)
             called = time.perf_counter()
@@ -506,6 +509,25 @@ class Runtime:
                         else "planning_obsolete"
                     ),
                 )
+            self._remember_turn(goal, record, decision, task)
+
+    def _remember_turn(self, goal, record, decision, task):
+        """One line of dialogue memory for the next goal; no IDs or authority."""
+        turn = {"goal": goal[:200], "result": str(record["state"])}
+        if task is not None and self.task is task:
+            turn["result"] = str(self.execution.state)
+            turn["steps"] = [
+                {"skill": step.skill, "args": step.args,
+                 "result": str(self.execution.results.get(step.step_id, "NOT_RUN"))}
+                for step in task.plan().steps
+            ]
+            if self.execution.reason:
+                turn["reason"] = self.execution.reason[:240]
+        elif decision is not None and decision.text:
+            turn["reply"] = decision.text[:400]
+        elif record.get("reason"):
+            turn["reason"] = str(record["reason"])[:240]
+        self.turns.append(turn)
 
     async def _execute(self, task):
         if not self._active(task):
@@ -784,16 +806,18 @@ class Runtime:
                     stage="observe",
                 )
             if status.state == ActionState.FAILED:
-                self._record_error(
-                    status.error
-                    or error_info(
-                        "action_failed",
-                        node_id=node_name,
-                        task_id=task.task_id,
-                        action_id=action.action_id,
-                        stage="observe",
-                    )
+                failure = status.error or error_info(
+                    "action_failed",
+                    node_id=node_name,
+                    task_id=task.task_id,
+                    action_id=action.action_id,
+                    stage="observe",
                 )
+                if failure.code == "action_failed" and status.reason:
+                    failure = failure.model_copy(
+                        update={"message": f"{step.skill}: {status.reason}"[:240]}
+                    )
+                self._record_error(failure)
             if status.state == ActionState.SUCCEEDED:
                 task.outputs[step.step_id] = dict(status.output)
             return status.state, status, world

@@ -21,7 +21,7 @@ panel.innerHTML = `
     #camera-panel img {width:100%;height:100%;object-fit:contain;position:absolute}
     #camera-panel .scene-controls {padding:0 12px 8px;display:flex;gap:6px;flex-wrap:wrap}
     #camera-panel .scene-note {padding:8px 14px;line-height:1.7;background:#edf2ef}
-    #camera-panel [hidden] {display:none!important}
+    #camera-panel[hidden],#camera-panel [hidden] {display:none!important}
     #camera-panel .empty {padding:24px;text-align:center;color:#60766d;line-height:1.8}
     #camera-panel footer {padding:10px 14px;line-height:1.6;overflow-wrap:anywhere}
   </style>
@@ -42,6 +42,15 @@ panel.innerHTML = `
     <div class="empty">等待相机节点连接</div></div>
   <footer><div class="detail">未收到观测</div><small class="hint">相机未连接时，机器人界面仍可使用。</small></footer>`;
 document.body.append(panel);
+// Embedded in the dashboard: stay hidden until its 相机观测 button asks; visibility only.
+if (window.parent !== window) {
+  panel.hidden = true;
+  window.addEventListener("message", (e) => {
+    if (e.source !== window.parent || e.data?.type !== "wrs-camera-panel") return;
+    panel.hidden = !e.data.visible;
+  });
+  window.parent.postMessage({type: "wrs-camera-panel", ready: true}, "*");
+}
 const status = panel.querySelector(".status"), detail = panel.querySelector(".detail");
 const hint = panel.querySelector(".hint"), empty = panel.querySelector(".empty");
 const img = panel.querySelector("img"), viewport = panel.querySelector(".viewport");

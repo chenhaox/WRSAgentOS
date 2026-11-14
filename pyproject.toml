@@ -39,10 +39,12 @@ dev = ["httpx>=0.28,<0.29", "python-dotenv>=1.1,<2",
 include = ["wrs_agent*"]
 
 [tool.setuptools.package-data]
+"wrs_agent" = ["assets/kitchen_editor/*.js", "assets/kitchen_editor/*.css"]
 "wrs_agent.drivers.cameras" = ["LICENSE.legacy-wrs"]
 "wrs_agent.nodes.camera" = ["panel.js", "scene.js"]
 "wrs_agent.nodes.asr" = ["assets.json"]
 "wrs_agent.nodes.tts" = ["assets.json"]
+"wrs_agent.nodes.ui" = ["static/*"]
 "wrs_agent.nodes.segmentation" = ["assets.json", "fastsam_assets.json", "clip_assets.json"]
 "wrs_agent.nodes.vision" = ["assets.json"]
 "wrs_agent.nodes.grasp" = ["assets.json"]

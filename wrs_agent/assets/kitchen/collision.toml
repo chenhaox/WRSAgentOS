@@ -1,0 +1,101 @@
+# 厨具碰撞体，单位米，相对各自模型原点。
+# center / size 来自 STL 包围盒；开口容器做成底板加四壁，顶上留空。
+# 锅耳、碗把在内腔之外单独加一块，避免把整份包围盒当成实心。
+
+[shapes.table]
+kind = "solid"
+center = [0.0, 0.0, 0.0]
+size = [1.1, 1.0, 0.06]
+
+[shapes.cooker]
+kind = "solid"
+center = [0.0, 0.0, 0.023]
+size = [0.296, 0.380, 0.045]
+
+[shapes.pot]
+kind = "vessel"
+center = [0.0, 0.0, 0.060]
+size = [0.230, 0.230, 0.110]
+wall = 0.010
+floor = 0.008
+
+[[shapes.pot.extras]]
+center = [0.150, 0.0, 0.078]
+size = [0.070, 0.036, 0.026]
+
+[[shapes.pot.extras]]
+center = [-0.150, 0.0, 0.078]
+size = [0.070, 0.036, 0.026]
+
+[shapes.lid]
+kind = "solid"
+center = [0.0, 0.0, 0.031]
+size = [0.246, 0.246, 0.062]
+
+[shapes.cup]
+kind = "vessel"
+liquid = true
+center = [0.009, 0.0, 0.058]
+size = [0.110, 0.082, 0.108]
+wall = 0.004
+floor = 0.004
+
+# 漏勺口朝上。网兜和柄按 STL 实测：网从 z=-0.17 到 -0.03，柄在 x≈-0.064 沿 z 向上。
+[shapes.skimmer]
+kind = "vessel"
+center = [0.000, 0.0, -0.100]
+size = [0.150, 0.140, 0.140]
+wall = 0.004
+floor = 0.004
+
+[[shapes.skimmer.extras]]
+center = [-0.064, 0.0, 0.070]
+size = [0.022, 0.024, 0.200]
+
+[shapes.holder]
+kind = "solid"
+center = [0.0, 0.0, 0.053]
+size = [0.170, 0.170, 0.105]
+
+[shapes.plate]
+kind = "vessel"
+center = [0.0, 0.0, 0.010]
+size = [0.190, 0.190, 0.020]
+wall = 0.008
+floor = 0.006
+
+[shapes.block]
+kind = "solid"
+center = [0.0, 0.0, 0.0]
+size = [0.100, 0.060, 0.030]
+
+[shapes.bowl]
+kind = "vessel"
+center = [0.0, 0.0, 0.040]
+size = [0.158, 0.158, 0.072]
+wall = 0.006
+floor = 0.006
+
+[[shapes.bowl.extras]]
+center = [0.098, 0.0, 0.042]
+size = [0.064, 0.024, 0.018]
+
+[shapes.rack]
+kind = "solid"
+center = [0.0, 0.0, 0.020]
+size = [0.160, 0.160, 0.040]
+
+[assign]
+table = "table"
+induction_cooker = "cooker"
+pot = "pot"
+pot_lid = "lid"
+measuring_cup = "cup"
+skimmer = "skimmer"
+skimmer_holder = "holder"
+plate = "plate"
+plate_block = "block"
+bowl_support = "bowl"
+bowl_support_2 = "bowl"
+bowl_rack = "rack"
+bowl_rack_2 = "rack"

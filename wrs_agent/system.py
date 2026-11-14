@@ -41,11 +41,12 @@ def step(skill, *, after=(), inputs=None, **args):
 class System:
     """A live node directory; launch() additionally owns local processes."""
 
-    def __init__(self, bus, *, skill_bindings=None, peers=None):
-        self.endpoint, self.site, self.env_id = bus.endpoint, bus.site, bus.env_id
+    def __init__(self, bus, *, skill_bindings=None, peers=None, registry=None):
+        """A Node passes its own discover() directory; its caller owns closing it."""
         self.bindings = dict(skill_bindings or {})
         self.roles = dict(peers or {})
-        self.registry = NodeRegistry(bus, bindings=self.bindings)
+        self.registry = registry or NodeRegistry(bus, bindings=self.bindings)
+        self.endpoint, self.site, self.env_id = bus.endpoint, bus.site, self.registry.env_id
         self._transports, self.clients = self.registry.buses, self.registry.clients
         self._bound_buses = {}  # Selected control peers outlive evicted directory descriptions.
         self._local_stack = None  # Only for diagnostics, never needed to discover nodes.
@@ -159,6 +160,7 @@ class System:
         port=0, site="local", env_id=None, live_model=False,
         tts_backend="mock", tts_python=None, tts_prepared_texts=(),
         asr_backend="mock", asr_python=None, asr_script=(), asr_vocabulary=(),
+        ui_port=None, ui_viewer=None, ui_viewer_port=None,
     ):
         from wrs_agent.processes import LocalStack
 
@@ -173,6 +175,9 @@ class System:
             asr_python=asr_python,
             asr_script=asr_script,
             asr_vocabulary=asr_vocabulary,
+            ui_port=ui_port,
+            ui_viewer=ui_viewer,
+            ui_viewer_port=ui_viewer_port,
             duration=duration,
             bindings=bindings,
             port=port,
