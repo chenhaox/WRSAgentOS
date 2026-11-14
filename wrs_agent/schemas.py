@@ -234,6 +234,10 @@ class MeshGeometry(Boundary):
         return self
 
 
+# ObjectData fields that change as objects move; the rest is configuration.
+PLACEMENT_FIELDS = frozenset({"pos", "rotmat", "inside", "resting_on"})
+
+
 class ObjectData(Boundary):
     """One identified object; absent pose/geometry means unknown, never identity."""
 
@@ -246,6 +250,12 @@ class ObjectData(Boundary):
         list[Annotated[float, Field(ge=0, le=1)]], Field(min_length=3, max_length=3)
     ] = Field(default_factory=lambda: [0.6, 0.6, 0.6])
     location: Name | None = None  # Symbolic location used by Mock pick/place.
+    # Relations a backend derives from its own model; None means not reported.
+    # container has an opening (seat_in target, can be poured); solid is a stand or surface.
+    shape: Literal["container", "solid"] | None = None
+    inside: Name | None = None  # Container currently holding this object.
+    resting_on: Name | None = None  # Stand or surface under it, when not inside one.
+    home: Name | None = None  # Where it started; the target of "put it back".
     source: Name
     observed_at_ns: int | None = Field(default=None, gt=0)
     valid: bool = True
@@ -293,6 +303,15 @@ class SpeechData(Boundary):
     last_text: str = Field(default="", max_length=512)
 
 
+class VisionData(Boundary):
+    kind: Literal["vision"] = "vision"
+    completed: Counter = 0
+    result_id: Name | None = None
+    observation_id: Name | None = None
+    count: int = Field(default=0, ge=0, le=32)
+    health: str = Field(default="waiting", max_length=80)
+
+
 class NodeSnapshot(Boundary):
     """One execution node at capture time; never an atomic whole-system view or grant."""
 
@@ -304,7 +323,7 @@ class NodeSnapshot(Boundary):
     admission: Literal["OPEN", "HELD", "UNKNOWN"]
     active_action: Name | None
     stop_confirmed: bool
-    data: Annotated[SceneData | SpeechData, Field(discriminator="kind")]
+    data: Annotated[SceneData | SpeechData | VisionData, Field(discriminator="kind")]
 
 
 class ActionContext(NodeSnapshot):
@@ -331,7 +350,7 @@ class FeatureSnapshot(Boundary):
 
 class NodeInfo(Boundary):
     node_id: Name
-    node_type: Literal["agent", "wrs", "tts", "voice", "asr", "vision", "ui", "custom"]
+    node_type: Literal["agent", "wrs", "tts", "voice", "asr", "camera", "vision", "ui", "custom"]
     target: Name | None = None
     actions: bool = False
     robot_controls: bool = False

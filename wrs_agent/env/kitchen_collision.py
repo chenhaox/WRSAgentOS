@@ -83,12 +83,15 @@ def boxes_overlap(center_a, rot_a, half_a, center_b, rot_b, half_b, pad=0.001):
     half_a = np.asarray(half_a, dtype=float) + pad
     half_b = np.asarray(half_b, dtype=float) + pad
     translation = rot_a.T @ (center_b - center_a)
-    rotation = np.abs(rot_a.T @ rot_b) + 1e-8
+    # Radii use |R|; projected distances need the signed R, or the test depends
+    # on which box is passed first and can miss or invent a contact.
+    signed = rot_a.T @ rot_b
+    rotation = np.abs(signed) + 1e-8
     for axis in range(3):
         if abs(translation[axis]) > half_a[axis] + half_b @ rotation[axis]:
             return False
     for axis in range(3):
-        if abs(translation @ rotation[:, axis]) > half_a @ rotation[:, axis] + half_b[axis]:
+        if abs(translation @ signed[:, axis]) > half_a @ rotation[:, axis] + half_b[axis]:
             return False
     for i in range(3):
         i1, i2 = (i + 1) % 3, (i + 2) % 3
@@ -98,7 +101,7 @@ def boxes_overlap(center_a, rot_a, half_a, center_b, rot_b, half_b, pad=0.001):
                 half_a[i1] * rotation[i2, j] + half_a[i2] * rotation[i1, j]
                 + half_b[j1] * rotation[i, j2] + half_b[j2] * rotation[i, j1]
             )
-            distance = abs(translation[i1] * rotation[i2, j] - translation[i2] * rotation[i1, j])
+            distance = abs(translation[i1] * signed[i2, j] - translation[i2] * signed[i1, j])
             if distance > radius:
                 return False
     return True

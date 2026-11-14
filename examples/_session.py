@@ -11,7 +11,7 @@ _STARTERS = {
     "wrs": ("examples/camera/00_start_router.py、examples/wrs/05_start_node.py "
             "或 examples/voice/05_start_wrs_voice.py"),
     "tts": "examples/tts/01_start_node.py",
-    "voice": "examples/voice/07_start_llm_voice.py",
+    "voice": "examples/voice/07_start_llm_voice.py 或 examples/fafu/00_start_router.py",
 }
 
 

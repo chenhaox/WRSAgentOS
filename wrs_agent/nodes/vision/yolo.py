@@ -10,7 +10,8 @@ from wrs_agent.nodes.vision.results import Object2D
 
 
 class YoloDetector:
-    def __init__(self, weights, sha256, *, confidence=0.35, device="cpu", clip_weights=None):
+    def __init__(self, weights, sha256, *, confidence=0.35, device="cpu", clip_weights=None,
+                 vocabulary=None):
         path = Path(weights).resolve(strict=True)
         if not path.is_file() or path.suffix != ".pt":
             raise ValueError("local_yolo_checkpoint_required")
@@ -37,7 +38,14 @@ class YoloDetector:
             self.model.to(selected)
             # CLIP accepts a local filename; checking it first disables its download path.
             self.model.model.clip_model = CLIP(str(text_asset[0]), device=selected)
+            if vocabulary:
+                # Continuous detection then reports exactly these names, the same ones locate uses.
+                self.model.set_classes(list(vocabulary))
+                self.model.predictor = None
+                self.labels = list(vocabulary)
             self.default_embeddings = self.model.model.txt_feats.clone()
+        elif vocabulary:
+            raise ValueError("vocabulary_requires_text_model")
 
     def detect(self, rgb):
         # Ultralytics' numpy input convention is BGR; camera arrays are explicitly RGB.

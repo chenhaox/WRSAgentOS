@@ -1,0 +1,88 @@
+# 实机识别类别。单位米，盒子以物体中心为原点，摆正后 x / y 为水平、z 竖直。
+#
+# 识别给位置，这里给大小：YOLO 只有像素框，深度只看得见朝向相机的一面，
+# 规划避障和倒入需要整只物体的体积，所以按类别写固定尺寸。
+# 尺寸来源：wrs_agent/assets/kitchen/collision.toml 里由 STL 包围盒量得的同名厨具。
+# 实物和模型不一样时，用尺子量实物后改这里，不要按识别框估。
+#
+# 每一类：
+#   prompt   YOLO-World 的英文名。连续检测和 locate_object 都用它，要与 target 完全一致
+#   name     给大模型和看板看的中文名
+#   kind     vessel = 有开口能装东西（seat_in / pour 的目标）；solid = 实心或托架
+#   size     外形 [x, y, z]
+#   wall / floor  vessel 的壁厚和底厚
+#   graspable     false 时不允许 pick（锅、灶台这类只当障碍和目标）
+#   rgb      看板 3D 画面里的颜色
+
+[table]
+# 桌面不靠识别：每次 observe 从点云里找最低的大平面，找不到用 real.toml 的 table.z。
+size = [1.2, 1.0, 0.04]
+rgb = [0.75, 0.72, 0.65]
+
+[classes.bowl]
+prompt = "bowl"
+name = "碗"
+kind = "vessel"
+size = [0.158, 0.158, 0.072]
+wall = 0.006
+floor = 0.006
+graspable = true
+rgb = [0.92, 0.92, 0.88]
+
+[classes.pot]
+prompt = "pot"
+name = "锅"
+kind = "vessel"
+size = [0.230, 0.230, 0.110]
+wall = 0.010
+floor = 0.008
+graspable = false
+rgb = [0.55, 0.55, 0.60]
+
+[classes.plate]
+prompt = "plate"
+name = "盘子"
+kind = "vessel"
+size = [0.190, 0.190, 0.020]
+wall = 0.008
+floor = 0.006
+graspable = true
+rgb = [0.95, 0.95, 0.95]
+
+[classes.cup]
+prompt = "cup"
+name = "量杯"
+kind = "vessel"
+size = [0.110, 0.082, 0.108]
+wall = 0.004
+floor = 0.004
+graspable = true
+rgb = [0.80, 0.88, 0.95]
+
+[classes.strainer]
+prompt = "strainer"
+name = "漏勺"
+kind = "vessel"
+# 只算网兜；柄的方向识别不出来，由 GraspNet 在点云上选抓取位置。
+size = [0.150, 0.140, 0.140]
+wall = 0.004
+floor = 0.004
+graspable = true
+rgb = [0.70, 0.45, 0.25]
+
+[classes.cooktop]
+prompt = "induction cooker"
+name = "电磁炉"
+kind = "solid"
+size = [0.296, 0.380, 0.045]
+graspable = false
+rgb = [0.20, 0.20, 0.20]
+
+[classes.noodles]
+prompt = "noodles"
+name = "面条"
+kind = "solid"
+# 放在容器里时是散装内容物，只能随容器一起倒，不能单独 pick。
+size = [0.080, 0.080, 0.030]
+graspable = true
+rgb = [0.95, 0.85, 0.45]

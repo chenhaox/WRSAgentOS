@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Annotated
 
 from pydantic import Field, model_validator
 
@@ -37,6 +38,10 @@ class YoloOptions(Boundary):
     clip_weights: Path | None = Field(default=None, strict=False)
     max_hz: float = Field(default=5.0, gt=0, le=15)
     table_roi: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    # YOLO-World only: names continuous detection reports, instead of the built-in classes.
+    vocabulary: list[Annotated[str, Field(min_length=1, max_length=64)]] | None = Field(
+        default=None, min_length=1, max_length=32,
+    )
 
     @model_validator(mode="after")
     def region(self):
@@ -88,7 +93,8 @@ class YoloNode(Node):
 
         return YoloDetector(self.options.weights, self.options.weights_sha256,
                             confidence=self.options.confidence, device=self.options.device,
-                            clip_weights=self.options.clip_weights)
+                            clip_weights=self.options.clip_weights,
+                            vocabulary=self.options.vocabulary)
 
     async def setup(self):
         self.state = VisionState()

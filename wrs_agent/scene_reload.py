@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from wrs_agent.scene import load_scene
+from wrs_agent.schemas import PLACEMENT_FIELDS
 
 LOG = logging.getLogger(__name__)
 
@@ -25,8 +26,8 @@ class SceneReloader:
                 return False
             # Only placement edits are live; geometry/material changes require a restart.
             if set(objects) != set(self.previous) or any(
-                obj.model_dump(exclude={"pos", "rotmat"})
-                != self.previous[name].model_dump(exclude={"pos", "rotmat"})
+                obj.model_dump(exclude=PLACEMENT_FIELDS)
+                != self.previous[name].model_dump(exclude=PLACEMENT_FIELDS)
                 for name, obj in objects.items()
             ):
                 raise ValueError("模型、颜色或物体清单已改变，请重启 05 和 07；当前摆放不变。")

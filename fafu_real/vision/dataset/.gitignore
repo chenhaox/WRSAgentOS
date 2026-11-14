@@ -1,6 +1,0 @@
-images/
-labels/
-runs/
-weights/
-outputs/
-*.cache

@@ -233,7 +233,8 @@ class Dashboard:
             verdict = overview["planning"]
             self.hub.emit(
                 "planning", state=verdict, request_id=overview["planning_request_id"],
-                reason=overview["reason"] if verdict in REPLIED else "",
+                reason=(overview.get("planning_reason") or overview["reason"])
+                if verdict in REPLIED else "",
                 timing=overview.get("last_planning", {}) if verdict != "WAITING" else {},
             )
         last["planning"] = planning

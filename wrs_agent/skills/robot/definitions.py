@@ -165,7 +165,9 @@ SKILLS = {
         _skill(
             "move_named_pose",
             MoveArgs,
-            "Move to a validated named joint pose",
+            "Move to a validated named joint pose. Manipulation skills plan their own "
+            "approach from wherever the arm is, so do not insert it between them; use it "
+            "only when the user asks for that pose",
             preconditions=("known_pose",),
         ),
         _skill(
@@ -187,7 +189,9 @@ SKILLS = {
         _skill(
             "pick",
             PickArgs,
-            "Acquire an observed object and verify holding",
+            "Acquire an observed object and verify holding. A loose piece inside a "
+            "container has no handle: do not pick it; pick that container and pour it. "
+            "A container seated inside another is picked by its own handle",
             preconditions=("empty_gripper", "object_visible"),
             recovery=("observe_once",),
         ),
@@ -234,8 +238,9 @@ SKILLS = {
         _skill(
             "pour",
             PourArgs,
-            "Carry the held source above the observed target and tilt its opening past "
-            "horizontal to empty it, then return it upright and still held",
+            "Carry the held container above the observed target and tilt its opening past "
+            "horizontal. One pour empties every object inside it together, then returns "
+            "the container upright and still held. The source is the container, never a piece",
             preconditions=("source_held", "target_visible"),
             timeout=30.0,
         ),

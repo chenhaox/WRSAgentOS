@@ -1,0 +1,58 @@
+# FAFU 实机结点的参数。关节角是弧度，长度是米，世界系与 profile.toml 相同
+# （机械臂基座在 base_pos，Z 朝上）。这里没有示教位，只有安全参数和观察方式。
+
+[arm]
+# 串口；"auto" 用 fafu_arm_sdk/fafu_robot_python/robot.cfg 里的设置。
+serial_port = "auto"
+# 关节速度百分比（100 = π rad/s）。首次上电保持低速。
+speed = 5
+# 下发时相邻两个关节点最多差多少度；规划出的路径会按它加密。
+path_step_deg = 1.5
+# 一段下发多少个点。段与段之间检查停止，停止在段边界生效。
+chunk = 60
+# 规划用的关节范围 = URDF 与 robot.cfg 的交集，再每边收这么多度。
+# J2、J3 的下限就是收拢位 0，收得太多 home 会落在范围外，被夹到范围边上。
+joint_margin_deg = 0.5
+# 执行完读回关节，和规划终点差超过这个弧度就判为未到位。
+arrive_tolerance = 0.04
+# 断开时关节："hold" 顶住 / "brake" 阻尼 / "stop" 松开（会下坠）。
+release_on_close = "hold"
+
+[gripper]
+open_m = 0.055
+# 合爪按力矩停：force 是停止阈值，effort 是力矩上限（robot.cfg 原始单位）。
+force = 160
+effort = 220
+
+[poses]
+# move_named_pose 只认这里的名字。home 是上电时的收拢位（各关节约 0）。
+home = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+[observe]
+# observe 不用示教位：按手眼矩阵用 IK 算一个让相机看向 target 的关节角。
+# target 是桌面上要看的点（世界 xy），height 是相机光心离桌面多高。
+# 竖直向下抓取的可达区大约是世界 x 0.05–0.30 m（z 0.08 处），物体放在这附近。
+target = [0.22, 0.0]
+height = 0.40
+# 依次尝试的相机俯仰（0 = 正下方）和绕竖直轴的转角，取第一个能到且不碰撞的。
+tilts_deg = [0, 15, 30, 45]
+yaws_deg = [0, 180, 90, -90]
+# 到位后等多久再取图，避免运动模糊和臂还在晃。
+settle_s = 0.8
+
+[table]
+# 点云找不到桌面时用这个高度（桌面顶面的世界 z）。
+z = 0.0
+
+[perception]
+camera = "camera"
+detector = "yolo"
+grasps = "graspnet"
+# 低于这个置信度的检测不进场景。
+min_score = 0.35
+# 同一类两个检测中心相距小于它，当成同一个物体。
+merge_m = 0.05
+# 前后两次 observe 里同类物体相距小于它，沿用原来的编号。
+track_m = 0.08
+# 检测框四边各向内收这个比例再取点，少带进背景。
+box_shrink = 0.15

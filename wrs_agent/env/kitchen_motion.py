@@ -7,7 +7,9 @@ pieces slide to the lip, leave the opening, and fall into the target.
 """
 
 import asyncio
+import time
 from copy import deepcopy
+from itertools import islice
 
 import numpy as np
 
@@ -53,6 +55,18 @@ GRASP_GAP = {
 }
 STEP = 0.04
 JOINT_STEP = 0.15
+# A longer trail restarts mid-carry, so it no longer leads back and is not retraced.
+TRAIL_LIMIT = 4000
+# Travel between skills: joint spacing of checked samples, tree step, search time
+# per goal, and how far a held vessel may lean on the way.
+TRANSIT_CHECK = 0.04
+TRANSIT_EXTEND = 0.3
+TRANSIT_BUDGET = 1.5
+# When a fixed pattern already works, the search only looks for something shorter.
+TRANSIT_QUICK = 0.8
+TRANSIT_TILT = np.radians(20.0)
+# Shoulder joints swing the most mass, so a nearer goal is judged mostly on them.
+JOINT_WEIGHT = np.array([1.6, 1.5, 1.2, 0.8, 0.6, 0.4])
 DT = 0.02
 GRAVITY = 9.81
 TILT = 115.0
@@ -147,7 +161,9 @@ class _Collision:
     def __init__(self, model):
         self.model = model
         self.model_held = None
-        self.bodies = load_bodies()
+        # A model built from recognition brings its own bodies; the mesh kitchen reads the file.
+        bodies = getattr(model, "bodies", None)
+        self.bodies = load_bodies() if bodies is None else bodies
         self.arm = load_arm()
         self.links = {link.name: link for link in model.robot.runtime_lnks}
         missing = [name for name in self.arm if name not in self.links]
@@ -276,6 +292,11 @@ class KitchenMotion:
     def __init__(self, model):
         self.model = model
         self.rng = np.random.default_rng(1)
+        # Path search draws from its own stream, so the fixed patterns do not shift it.
+        self.search_rng = np.random.default_rng(2)
+        # Per instance, so a recognized scene can put a measured grasp on any object.
+        self.grasps = dict(GRASPS)
+        self.grasp_gaps = dict(GRASP_GAP)
         self._jaw_visual, self._jaw_open, self._jaw_mid, self._jaw_closed = _prepare_jaws(model)
         self.jaw = 0.0
         self.jaw_gap = 0.016
@@ -293,6 +314,11 @@ class KitchenMotion:
         }
         self.rest = {name: self._pose(name) for name in model.objects}
         self.support = self._find_supports()
+        self.home = {name: self.support.get(name) or self._stand_under(name) for name in model.objects}
+        # Frames stepped since the held object was picked, so a place can retrace them.
+        self.trail = []
+        self._relation_key = None
+        self._relations = {}
         self.held = None
         self.offset = None
         self.held_rot = None
@@ -462,7 +488,7 @@ class KitchenMotion:
         return self.collision.hits(*args, **kwargs)
 
     def _grasp_gap(self, name):
-        return GRASP_GAP.get(name, 0.016)
+        return self.grasp_gaps.get(name, 0.016)
 
     def _set_jaw(self, amount, gap=None):
         """0 is open, 1 is closed on the handle. The arm box narrows with it."""
@@ -595,7 +621,7 @@ class KitchenMotion:
 
     def _contact(self, name, pos, rot):
         """Fingertip position and tool rotation that put the jaw on ``name``."""
-        spec = GRASPS.get(name)
+        spec = self.grasps.get(name)
         if spec is None:
             _, top = self.collision.z_bounds(name)
             point = np.array([pos[0], pos[1], top + 0.004])
@@ -620,10 +646,11 @@ class KitchenMotion:
         tcp = obj @ np.linalg.inv(self.grasp)
         return tcp[:3, 3], tcp[:3, :3]
 
-    def _move_aimed(self, points, rot, reason, touch, close_at=None):
+    def _move_aimed(self, points, rot, reason, touch, close_at=None, *, lined=False):
         """Move onto ``touch``. The jaw stays open until it is close, then shuts.
 
         Only the object itself may meet the fingers. The stand under it stays solid.
+        ``lined`` starts from the current tool pose and only follows ``points``.
         """
         seed = self._qs()
         frames = []
@@ -657,14 +684,22 @@ class KitchenMotion:
         down = float(np.asarray(rot, dtype=float)[2, 0]) < -0.9
         pinch_up = abs(float(np.asarray(rot, dtype=float)[2, 1])) > 0.7
         tol = 0.08 if down else (0.15 if pinch_up else 0.25)
-        q = self._solve_pose(first, rot, seed, allow_roll=False, wide=True, aim_tol=tol)
-        if q is None and not down and not pinch_up:
-            q = self._solve_pose(first, rot, seed, allow_roll=True, wide=True)
-        if q is None:
-            raise SkillFailure(reason)
-        self.model.apply(q)
-        rot = np.asarray(self.model.tcp.tf[:3, :3], dtype=float).copy()
-        self.model.apply(seed)
+        if lined:
+            # Already above the handle in the grasp orientation: descend along the line.
+            self.model.apply(seed)
+            rot = np.asarray(self.model.tcp.tf[:3, :3], dtype=float).copy()
+            cursor = self._tcp().copy()
+            remaining = list(points)
+            pinch_up = down = False
+        else:
+            q = self._solve_pose(first, rot, seed, allow_roll=False, wide=True, aim_tol=tol)
+            if q is None and not down and not pinch_up:
+                q = self._solve_pose(first, rot, seed, allow_roll=True, wide=True)
+            if q is None:
+                raise SkillFailure(reason)
+            self.model.apply(q)
+            rot = np.asarray(self.model.tcp.tf[:3, :3], dtype=float).copy()
+            self.model.apply(seed)
         if pinch_up or down:
             count = max(1, int(np.ceil(np.max(np.abs(q - seed)) / JOINT_STEP)))
             for index in range(1, count + 1):
@@ -676,7 +711,7 @@ class KitchenMotion:
             seed = q
             cursor = first
             remaining = points[1:]
-        else:
+        elif not lined:
             # Follow the waypoints in short steps. One joint leap from the
             # bowl swings the open gripper through the skimmer.
             cursor = self._tcp().copy()
@@ -698,6 +733,265 @@ class KitchenMotion:
                 seed = q
             cursor = np.asarray(point, dtype=float)
         return frames
+
+    def _transit_check(self, touch=(), sink=(), enter=(), depart=(), apart=(), upright=None):
+        """Fast clear test for travel, with the pair rules of ``_hits``.
+
+        Only the arm links and the held object with its contents move. Pairs of
+        resting objects cannot change on the way, so they are not tested.
+        ``touch`` may meet the arm (the handle about to be grasped). ``upright``
+        bounds how far the held object's up axis may turn from where it started.
+        """
+        held = self.held
+        carried = set() if held is None else {held, *self._children(held)}
+        locals_ = {} if held is None else {
+            child: self.locals[child] for child in self._children(held) if child in self.locals
+        }
+        allowed = set(touch) | carried
+        family = set(self._family())
+        rest_pairs = self.collision.rest_pairs
+        sink, enter, depart, apart = set(sink), set(enter), set(depart), set(apart)
+        arm_names = self.collision.arm_names
+        static = []
+        for name in self.model.objects:
+            if name in carried:
+                continue
+            for center, rot, half in self.collision._boxes(name, {}):
+                static.append((name, center, rot, half, float(np.linalg.norm(half))))
+
+        def ignored(mover, other):
+            pair = frozenset((mover, other))
+            if pair in rest_pairs or pair in family:
+                return True
+            if mover in arm_names:
+                return other in allowed
+            return other in sink or other in depart or (other in enter and mover != held)
+
+        targets = {
+            mover: [box for box in static if not ignored(mover, box[0])]
+            for mover in (*self.collision.arm, *carried)
+        }
+        keep_apart = [box for box in static if box[0] in apart]
+        start_up = None
+        if held is not None and upright is not None and self.held_rot is not None:
+            start_up = np.asarray(self.held_rot, dtype=float)[:, 2].copy()
+        min_up = float(np.cos(upright)) if upright is not None else -1.0
+
+        def free(q):
+            if held is None:
+                self.model.apply(q)
+                poses = {}
+            else:
+                poses = self._attached(q, held, self.offset, self.held_rot, locals_)
+            movers = []
+            for name, (center, half) in self.collision.arm.items():
+                tf = np.asarray(self.collision.links[name].tf, dtype=float)
+                rot = tf[:3, :3]
+                movers.append((name, tf[:3, 3] + rot @ center, rot, np.asarray(half, dtype=float)))
+            for name in carried:
+                for box in self.collision._boxes(name, poses):
+                    movers.append((name, *box))
+            for name, center, rot, half in movers:
+                # Bounding spheres first; the margin covers the box test's pad on both sides.
+                reach = float(np.linalg.norm(half)) + 0.004
+                for _other, other_center, other_rot, other_half, other_reach in targets[name]:
+                    if float(np.linalg.norm(center - other_center)) > reach + other_reach:
+                        continue
+                    if boxes_overlap(center, rot, half, other_center, other_rot, other_half):
+                        return False
+            if held is not None:
+                if keep_apart:
+                    for center, rot, half in self.collision._boxes(held, poses):
+                        for _other, other_center, other_rot, other_half, _ in keep_apart:
+                            if boxes_overlap(center, rot, half, other_center, other_rot, other_half, pad=0.006):
+                                return False
+                if start_up is not None:
+                    if float(poses[held][1][:, 2] @ start_up) < min_up:
+                        return False
+            return True
+
+        return free
+
+    def _clear_edge(self, start, goal, free):
+        start = np.asarray(start, dtype=float)
+        goal = np.asarray(goal, dtype=float)
+        count = max(1, int(np.ceil(float(np.max(np.abs(goal - start))) / TRANSIT_CHECK)))
+        return all(free(start + (goal - start) * index / count) for index in range(1, count + 1))
+
+    def _goal_configs(self, pos, rot, seed, free, aim_tol=0.25, limit=6):
+        """Clear IK solutions for one tool pose, the one nearest ``seed`` first."""
+        pos = np.asarray(pos, dtype=float)
+        rot = np.asarray(rot, dtype=float)
+        seed = np.asarray(seed, dtype=float)
+        # Many spread-out guesses, so the nearest arm posture is found every time
+        # instead of whichever one a few random tries happen to land on.
+        guesses = list(islice(self._seeds(seed), 3))
+        guesses += [self.search_rng.uniform(self.limits[:, 0], self.limits[:, 1]) for _ in range(24)]
+        found = []
+        for guess in guesses:
+            q = self._ik_pose(pos, rot, guess)
+            if q is None:
+                continue
+            self.model.apply(q)
+            if float(np.linalg.norm(self._tcp() - pos)) > 0.012:
+                continue
+            if float(np.linalg.norm(np.asarray(self.model.tcp.tf[:3, 0], dtype=float) - rot[:, 0])) > aim_tol:
+                continue
+            if any(float(np.max(np.abs(q - other))) < 0.05 for other in found):
+                continue
+            if free(q):
+                found.append(q)
+        self.model.apply(seed)
+        found.sort(key=lambda q: float(np.sum(np.abs(q - seed) * JOINT_WEIGHT)))
+        return found[:limit]
+
+    def _transit(self, goal, free, budget=TRANSIT_BUDGET):
+        """Joints from here to ``goal`` that ``free`` accepts, start excluded, or None.
+
+        A straight blend when it is clear. Otherwise RRT-Connect, then every
+        corner a straight blend can skip is cut, so no detour is left over.
+        """
+        start = self._qs()
+        goal = np.asarray(goal, dtype=float)
+        try:
+            if self._clear_edge(start, goal, free):
+                path = [start, goal]
+            else:
+                path = self._connect(start, goal, free, budget)
+                if path is None:
+                    return None
+                path = self._shortcut(path, free)
+        finally:
+            self.model.apply(start)
+        qs = []
+        for left, right in zip(path, path[1:]):
+            count = max(1, int(np.ceil(float(np.max(np.abs(right - left))) / JOINT_STEP)))
+            qs.extend(left + (right - left) * index / count for index in range(1, count + 1))
+        return qs
+
+    def _connect(self, start, goal, free, budget):
+        lo, hi = self.limits[:, 0], self.limits[:, 1]
+        trees = [([start], [-1]), ([goal], [-1])]
+        deadline = time.perf_counter() + budget
+
+        def extend(tree, target):
+            nodes, parents = tree
+            near = int(np.argmin([float(np.linalg.norm(node - target)) for node in nodes]))
+            delta = target - nodes[near]
+            span = float(np.linalg.norm(delta))
+            if span < 1e-6:
+                return near, True
+            reached = span <= TRANSIT_EXTEND
+            new = target if reached else nodes[near] + delta * (TRANSIT_EXTEND / span)
+            if not self._clear_edge(nodes[near], new, free):
+                return None, False
+            nodes.append(np.asarray(new, dtype=float))
+            parents.append(near)
+            return len(nodes) - 1, reached
+
+        def branch(tree, index):
+            nodes, parents = tree
+            out = []
+            while index >= 0:
+                out.append(nodes[index])
+                index = parents[index]
+            return out
+
+        grow = 0
+        while time.perf_counter() < deadline:
+            tree, other = trees[grow], trees[1 - grow]
+            added, _ = extend(tree, self.search_rng.uniform(lo, hi))
+            if added is not None:
+                target = tree[0][added]
+                while True:
+                    joined, reached = extend(other, target)
+                    if joined is None:
+                        break
+                    if reached:
+                        here = branch(tree, added)[::-1]
+                        there = branch(other, joined)
+                        path = here + there[1:]
+                        return path if grow == 0 else path[::-1]
+            grow = 1 - grow
+        return None
+
+    def _shortcut(self, path, free):
+        path = [np.asarray(node, dtype=float) for node in path]
+        smoothed = [path[0]]
+        index = 0
+        while index < len(path) - 1:
+            for far in range(len(path) - 1, index, -1):
+                if far == index + 1 or self._clear_edge(path[index], path[far], free):
+                    smoothed.append(path[far])
+                    index = far
+                    break
+        path = smoothed
+        for _ in range(40):
+            if len(path) < 3:
+                break
+            # Cut across a corner: points part way along two different legs.
+            first = int(self.search_rng.integers(0, len(path) - 1))
+            second = int(self.search_rng.integers(0, len(path) - 1))
+            if abs(first - second) < 1:
+                continue
+            first, second = sorted((first, second))
+            t, u = float(self.search_rng.uniform()), float(self.search_rng.uniform())
+            a = path[first] + (path[first + 1] - path[first]) * t
+            b = path[second] + (path[second + 1] - path[second]) * u
+            if self._clear_edge(a, b, free):
+                path = path[:first + 1] + [a, b] + path[second + 1:]
+        return path
+
+    def _travel_cost(self, start, frames):
+        """Weighted joint distance the frames sweep, starting from ``start``."""
+        cost = 0.0
+        previous = np.asarray(start, dtype=float)
+        for frame in frames:
+            q = np.asarray(frame["qs"], dtype=float)
+            cost += float(np.sum(np.abs(q - previous) * JOINT_WEIGHT))
+            previous = q
+        return cost
+
+    def _travel_frames(self, qs):
+        """Playback frames for a transit. A held object rides on the locked grasp."""
+        held = self.held
+        locals_ = {} if held is None else {
+            child: self.locals[child] for child in self._children(held) if child in self.locals
+        }
+        frames = []
+        for q in qs:
+            poses = {}
+            if held is not None:
+                poses = self._attached(q, held, self.offset, self.held_rot, locals_)
+                self.held_rot = poses[held][1]
+            frames.append(self._frame(q, poses, held))
+        return frames
+
+    def _approach(self, pre, contact, rot, reason, touch, quick=False):
+        """Travel to above the handle along a clear joint path, then descend onto it.
+
+        ``quick`` only looks for a shorter way than an approach that already works.
+        """
+        seed = self._qs()
+        free = self._transit_check(touch={touch, *self._children(touch)})
+        down = float(np.asarray(rot, dtype=float)[2, 0]) < -0.9
+        pinch_up = abs(float(np.asarray(rot, dtype=float)[2, 1])) > 0.7
+        tol = 0.08 if down else (0.15 if pinch_up else 0.25)
+        for goal in self._goal_configs(pre, rot, seed, free, aim_tol=tol, limit=4):
+            self.model.apply(seed)
+            self._set_jaw(0.0, self._grasp_gap(touch))
+            qs = self._transit(goal, free, budget=TRANSIT_QUICK if quick else TRANSIT_BUDGET)
+            if qs is None:
+                continue
+            frames = self._travel_frames(qs)
+            self.model.apply(goal)
+            try:
+                frames += self._move_aimed([contact], rot, reason, touch, close_at=contact, lined=True)
+            except SkillFailure:
+                continue
+            return frames
+        self.model.apply(seed)
+        return None
 
     def _carry_object(self, waypoints, sink, reason, start=None, apart=(), enter=(), depart=()):
         """Move the held object. The jaw stays on the point it closed on.
@@ -886,6 +1180,10 @@ class KitchenMotion:
         self._require(name)
         if name == "table":
             raise SkillFailure("object_not_graspable")
+        # Food cubes ride inside a vessel and have no handle. A skimmer or bowl
+        # keeps its grasp even when it is seated in another container.
+        if name in self.carriers and name not in self.grasps:
+            raise SkillFailure("contents_move_with_container")
         start_carriers = dict(self.carriers)
         try:
             self._set_jaw(0.0)
@@ -897,8 +1195,10 @@ class KitchenMotion:
             vertical = float(tool_x[2]) < -0.7
             if pinch_up or vertical:
                 # Straight down onto the handle. The jaw closes over the last centimetres.
-                points = [contact + np.array([0.0, 0.0, 0.08 if pinch_up else 0.06]), contact]
+                pre = contact + np.array([0.0, 0.0, 0.08 if pinch_up else 0.06])
+                points = [pre, contact]
             else:
+                pre = contact + np.array([0.0, 0.0, 0.10])
                 # Side grasp: straight up, across above the handle, then down.
                 here = self._tcp()
                 high = max(float(here[2]), float(contact[2])) + 0.24
@@ -912,10 +1212,26 @@ class KitchenMotion:
                     np.array([contact[0], contact[1], high]),
                     contact,
                 ]
-            frames = self._move_aimed(
-                points, tool_rot, "pick_unreachable_or_colliding", name,
-                close_at=contact,
+            # From wherever the last skill stopped, straight to above the handle when
+            # that is clear, around what is in the way when not. The fixed patterns
+            # stay as the fallback.
+            seed = self._qs()
+            try:
+                fixed = self._move_aimed(
+                    points, tool_rot, "pick_unreachable_or_colliding", name,
+                    close_at=contact,
+                )
+            except SkillFailure:
+                fixed = None
+            self.model.apply(seed)
+            self._set_jaw(0.0)
+            searched = self._approach(
+                pre, contact, tool_rot, "pick_unreachable_or_colliding", name, quick=fixed is not None,
             )
+            if fixed is None and searched is None:
+                raise SkillFailure("pick_unreachable_or_colliding")
+            options = [frames for frames in (searched, fixed) if frames]
+            frames = min(options, key=lambda frames: self._travel_cost(seed, frames))
             self._set_jaw(1.0)
             self.model.apply(frames[-1]["qs"])
             if float(np.linalg.norm(self._tcp() - contact)) > 0.015:
@@ -970,6 +1286,10 @@ class KitchenMotion:
         return self._put(args.object, args.surface, "place_on", inside=False)
 
     def plan_seat_in(self, args):
+        # A stand or rack has no opening. Seating something on it can only mean
+        # setting it down there, which is what place_on does.
+        if args.container in self.model.objects and self.collision.parts(args.container)[1] is None:
+            return self._put(args.object, args.container, "place_on", inside=False)
         return self._put(args.object, args.container, "seat_in", inside=True)
 
     def _put(self, name, surface, kind, *, inside):
@@ -990,27 +1310,124 @@ class KitchenMotion:
         depart = () if inside else (surface,)
         reason = f"{kind}_unreachable_or_colliding"
         start_q = self._qs()
+        start_rot = None if self.held_rot is None else np.asarray(self.held_rot).copy()
         last = None
+        slide = None
         for yaw in yaws:
             self.model.apply(start_q)
+            self.held_rot = start_rot
             aimed = _rotation([0.0, 0.0, 1.0], yaw) @ np.asarray(rot, dtype=float)
             try:
-                frames = self._lower(
+                slide = self._lower(
                     name, surface, rest, obj_pos, aimed, sink, apart, depart, reason, inside,
                 )
+                break
             except SkillFailure as exc:
                 last = exc
-                continue
-            self.held_rot = np.asarray(frames[-1]["poses"][name][1], dtype=float).copy()
-            cursor = frames[-1]["poses"][name][0]
-            released = self._release_frame(frames[-1], name, cursor, surface)
-            retreat = self._retreat(released, name, surface)
-            tail = [released] + retreat
-            if not inside:
-                base = retreat[-1] if retreat else released
-                tail += self._drop_home(name, cursor, rest, base)
-            return self._commit(frames + tail, kind, name)
+        # A searched joint path to above the rest. When the slide also works, the
+        # shorter of the two is kept, so a detour out front is not played for nothing.
+        self.model.apply(start_q)
+        self.held_rot = start_rot
+        searched = self._place_transit(
+            name, surface, rest, rot, yaws, apart, depart, reason, inside, quick=slide is not None,
+        )
+        options = [frames for frames in (slide, searched) if frames]
+        if options:
+            frames = min(options, key=lambda frames: self._travel_cost(start_q, frames))
+            return self._commit(frames + self._let_go(frames, name, surface, rest, inside), kind, name)
+        # The carry that brought it here is a known way back.
+        self.model.apply(start_q)
+        self.held_rot = start_rot
+        frames = self._retrace(name, surface, rest)
+        if frames:
+            return self._commit(frames + self._let_go(frames, name, surface, rest, inside), kind, name)
         raise last or SkillFailure(reason)
+
+    def _place_transit(self, name, surface, rest, rot, yaws, apart, depart, reason, inside, quick=False):
+        """Carry along a searched joint path to just above ``rest``, then lower onto it.
+
+        ``quick`` only looks for a shorter way than a slide that already works.
+        """
+        bottom = self._lowest_local(name)
+        hover_z = float(rest[2]) + 0.08
+        if inside:
+            _, rim = self.collision.z_bounds(surface)
+            hover_z = max(hover_z, float(rim) - bottom + 0.03)
+        hover = np.array([rest[0], rest[1], hover_z])
+        seed = self._qs()
+        start_rot = None if self.held_rot is None else np.asarray(self.held_rot).copy()
+        free = self._transit_check(apart=apart, depart=depart, upright=TRANSIT_TILT)
+        budget = TRANSIT_QUICK if quick else TRANSIT_BUDGET
+        for yaw in yaws[:1] if quick else yaws:
+            aimed = _rotation([0.0, 0.0, 1.0], yaw) @ np.asarray(rot, dtype=float)
+            tcp_pos, tcp_rot = self._tcp_from_object(hover, aimed)
+            for goal in self._goal_configs(tcp_pos, tcp_rot, seed, free, limit=4):
+                self.model.apply(seed)
+                self.held_rot = start_rot
+                qs = self._transit(goal, free, budget=budget)
+                if qs is None:
+                    continue
+                frames = self._travel_frames(qs)
+                self.model.apply(goal)
+                try:
+                    return self._settle_down(
+                        frames, name, surface, rest, aimed, set(), apart, depart, reason, inside,
+                    )
+                except SkillFailure:
+                    continue
+        self.model.apply(seed)
+        self.held_rot = start_rot
+        return None
+
+    def _let_go(self, frames, name, surface, rest, inside):
+        """Release at the last frame, back the jaw off, then settle it on its rest pose."""
+        self.held_rot = np.asarray(frames[-1]["poses"][name][1], dtype=float).copy()
+        cursor = frames[-1]["poses"][name][0]
+        released = self._release_frame(frames[-1], name, cursor, surface)
+        retreat = self._retreat(released, name, surface)
+        tail = [released] + retreat
+        if not inside:
+            base = retreat[-1] if retreat else released
+            tail += self._drop_home(name, cursor, rest, base)
+        return tail
+
+    def _retrace(self, name, surface, rest):
+        """Step the stepped carry backward, when it began where this place ends.
+
+        Only the arm and the held object follow the old frames. Anything poured out
+        stays where it fell, and every frame is checked against the scene as it is now.
+        """
+        trail = self.trail
+        if not trail or any(
+            frame["held"] != name or name not in frame["poses"] for frame in trail
+        ):
+            return None
+        current = trail[-1]
+        pos, _ = self._pose(name)
+        if (
+            not np.allclose(current["qs"], self._qs(), atol=1e-4)
+            or float(np.linalg.norm(np.asarray(current["poses"][name][0]) - pos)) > 1e-3
+        ):
+            return None
+        # The first held frame is already a little lifted; the same drop place_on allows.
+        lift = np.asarray(trail[0]["poses"][name][0], dtype=float) - np.asarray(rest, dtype=float)
+        if float(np.linalg.norm(lift[:2])) > 0.01 or not -0.003 <= float(lift[2]) <= 0.04:
+            return None
+        moving = {name, *self._children(name)}
+        family = set(self._family())
+        frames = []
+        for frame in reversed(trail[:-1]):
+            obj_pos = np.asarray(frame["poses"][name][0], dtype=float)
+            obj_rot = np.asarray(frame["poses"][name][1], dtype=float)
+            poses = {name: (obj_pos, obj_rot), **self._follow(name, obj_pos, obj_rot)}
+            if self._hits(frame["qs"], poses, moving, set(), family, depart=(surface,)):
+                self.model.apply(current["qs"])
+                return None
+            self.held_rot = obj_rot.copy()
+            baked = self._frame(frame["qs"], poses, name)
+            baked["jaw"], baked["jaw_gap"] = frame["jaw"], frame["jaw_gap"]
+            frames.append(baked)
+        return frames
 
     def _lower(self, name, surface, rest, obj_pos, rot, sink, apart, depart, reason, inside):
         """Raise, slide across at constant height, then descend.
@@ -1062,6 +1479,10 @@ class KitchenMotion:
                 frames = [self._frame(seed, {name: (np.asarray(obj_pos, dtype=float), rot)}, name)]
             else:
                 raise last or SkillFailure(reason)
+        return self._settle_down(frames, name, surface, rest, rot, sink, apart, depart, reason, inside)
+
+    def _settle_down(self, frames, name, surface, rest, rot, sink, apart, depart, reason, inside):
+        """Lower the held object from the last frame onto ``rest`` in 1 cm steps."""
         cursor, cursor_rot = frames[-1]["poses"][name]
         while cursor[2] - rest[2] > 0.003:
             nxt = cursor.copy()
@@ -1383,6 +1804,15 @@ class KitchenMotion:
                     frames = raised + tail
                     break
         if frames is None:
+            self.model.apply(start)
+            free = self._transit_check(upright=TRANSIT_TILT if self.held else None)
+            reachable = free(goal)
+            self.model.apply(start)
+            qs = self._transit(goal, free) if reachable else None
+            if qs:
+                self.model.apply(start)
+                frames = self._travel_frames(qs)
+        if frames is None:
             raise SkillFailure("pose_colliding")
         return self._commit(frames, "move_named_pose", self.held)
 
@@ -1545,6 +1975,8 @@ class KitchenMotion:
         finger = np.asarray(self.model.tcp.tf[:3, 0], dtype=float)
         aimed = self._yaw_onto(source_rot, finger, direction)
         seed = self._qs()
+        start_rot = None if self.held_rot is None else np.asarray(self.held_rot).copy()
+        goals = []
         for rotation in (aimed, source_rot):
             for standoff in (0.10, 0.12, 0.16):
                 base = np.asarray(opening, dtype=float) - direction * standoff - rotation @ local_cavity
@@ -1558,6 +1990,7 @@ class KitchenMotion:
                             continue
                         if self._aside(source, {source: (goal, rotation)}, {source, *self._children(source)}):
                             continue
+                        goals.append((goal, rotation))
                         travel_z = max(float(source_pos[2]), float(goal[2]))
                         up = np.array([source_pos[0], source_pos[1], travel_z])
                         across = np.array([goal[0], goal[1], travel_z])
@@ -1574,6 +2007,7 @@ class KitchenMotion:
                             )]
                             continue
                         self.model.apply(seed)
+                        self.held_rot = start_rot
                         try:
                             yield self._carry_object(
                                 waypoints, sink=sink, reason="pour_position_unreachable",
@@ -1581,6 +2015,24 @@ class KitchenMotion:
                             )
                         except SkillFailure:
                             self.model.apply(seed)
+        # Every lift-and-slide is blocked. Search a clear joint path to the nearest
+        # mouth poses instead; the vessel stays upright on the way.
+        self.model.apply(seed)
+        self.held_rot = start_rot
+        free = self._transit_check(sink=sink, enter=(target,), apart=(target,), upright=TRANSIT_TILT)
+        for goal, rotation in goals[:6]:
+            self.model.apply(seed)
+            self.held_rot = start_rot
+            tcp_pos, tcp_rot = self._tcp_from_object(goal, rotation)
+            for q in self._goal_configs(tcp_pos, tcp_rot, seed, free, limit=2):
+                self.model.apply(seed)
+                self.held_rot = start_rot
+                qs = self._transit(q, free, budget=1.0)
+                if qs is None:
+                    continue
+                yield self._travel_frames(qs)
+                self.model.apply(seed)
+                self.held_rot = start_rot
 
     def _yaw_onto(self, rot, finger, direction):
         """Turn the vessel in the horizontal move so joint 6 can tip toward the mouth."""
@@ -1664,7 +2116,7 @@ class KitchenMotion:
         self.grasp = np.asarray(grasp, dtype=float).copy()
         cavity = self.collision.parts(source)[1]
         center, size = cavity
-        handle = np.asarray(GRASPS[source][0], dtype=float)
+        handle = np.asarray(self.grasps[source][0], dtype=float)
         pivot = pos + rot @ handle
         target_cavity = self.collision.parts(target)[1]
         target_pos, target_rot = self._pose(target)
@@ -2176,6 +2628,10 @@ class KitchenMotion:
         self.grasp = None if grasp is None else np.asarray(grasp, dtype=float).copy()
         self.carriers = dict(frame["carriers"])
         self.locals = deepcopy(frame["locals"])
+        if self.held is None or len(self.trail) >= TRAIL_LIMIT:
+            self.trail = []
+        if self.held is not None:
+            self.trail.append(frame)
         data = None
         if self.focus in self.model.objects:
             data = self.model.objects[self.focus][0]
@@ -2194,6 +2650,47 @@ class KitchenMotion:
         if self.held is not None:
             return bool(self._pose(self.held)[1][2, 2] > 0.99)
         return True
+
+    def relations(self, fresh=False):
+        """Containment and support the planner cannot read off coordinates.
+
+        Supports are searched again only when a hold or a containment changes, or
+        when a skill ends, not on every streamed frame.
+        """
+        key = (self.held, tuple(sorted(self.carriers.items())))
+        if fresh or key != self._relation_key:
+            supports = self._find_supports()
+            self._relation_key = key
+            self._relations = {}
+            for name in self.model.objects:
+                loose = name != self.held
+                self._relations[name] = {
+                    "shape": "container" if self.collision.parts(name)[1] is not None else "solid",
+                    "inside": self.carriers.get(name) if loose else None,
+                    "resting_on": supports.get(name) or self._stand_under(name)
+                    if loose and name not in self.carriers else None,
+                    "home": self.home.get(name),
+                }
+        return self._relations
+
+    def _stand_under(self, name):
+        """A stand the body hangs into, so their boxes overlap and no gap is found.
+
+        The skimmer's net sits inside its holder. Takes the highest object right under
+        the body's origin; the table is the default surface and is not named.
+        """
+        pos, _ = self._pose(name)
+        best, best_top = None, None
+        for other in self.model.objects:
+            if other in (name, "table"):
+                continue
+            other_pos, _ = self._pose(other)
+            if float(np.linalg.norm(other_pos[:2] - pos[:2])) > 0.08 or other_pos[2] >= pos[2]:
+                continue
+            _, top = self.collision.z_bounds(other)
+            if top < pos[2] and (best_top is None or top > best_top):
+                best, best_top = other, top
+        return best
 
     def contents_of(self, name):
         return [child for child, parent in self.carriers.items() if parent == name]
@@ -2252,6 +2749,7 @@ def publish_kitchen(motion, state, index=None):
     if index is not None:
         motion.step(index)
     state.kinematics = motion.model.read()
+    relations = motion.relations(fresh=index is None or index == len(motion.path) - 1)
     posed = {}
     for name, data in state.objects.items():
         if name not in motion.model.objects:
@@ -2261,8 +2759,10 @@ def publish_kitchen(motion, state, index=None):
         posed[name] = data.model_copy(update={
             "pos": [float(value) for value in pos],
             "rotmat": [[float(value) for value in row] for row in rot],
+            **relations.get(name, {}),
         })
     state.objects = posed
+    state.held = motion.held
     state.facts["jaw"] = float(motion.jaw)
     state.facts["jaw_gap"] = float(motion.jaw_gap)
     state.pose = None

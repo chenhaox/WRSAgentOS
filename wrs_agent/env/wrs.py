@@ -12,7 +12,7 @@ from pathlib import Path
 
 from wrs_agent.executor import ActionExecutor, ExecutionUnknown, SkillFailure
 from wrs_agent.scene import load_scene
-from wrs_agent.schemas import ObjectData, RobotData, SceneData
+from wrs_agent.schemas import PLACEMENT_FIELDS, ObjectData, RobotData, SceneData
 from wrs_agent.skills.robot import SKILLS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -71,8 +71,8 @@ def sync_scene_objects(wrs, scene, objects, displayed):
         if (
             previous is not None and data.valid and data.pos is not None
             and data.rotmat is not None
-            and previous[0].model_dump(exclude={"pos", "rotmat"})
-            == data.model_dump(exclude={"pos", "rotmat"})
+            and previous[0].model_dump(exclude=PLACEMENT_FIELDS)
+            == data.model_dump(exclude=PLACEMENT_FIELDS)
         ):
             previous[1].set_pos_rotmat(pos=data.pos, rotmat=data.rotmat)
             displayed[name] = (data.model_copy(deep=True), previous[1])
@@ -229,11 +229,12 @@ class VirtualState:
         self.kinematics = kinematics
         self.objects = objects or {}
         self.pose = "home"
+        self.held = None
         self.facts = {}  # Backend-owned extras, e.g. which device the model mirrors.
 
     def snapshot(self):
         return SceneData(
-            robot=RobotData(pose=self.pose, kinematics=self.kinematics),
+            robot=RobotData(pose=self.pose, kinematics=self.kinematics, held_object=self.held),
             objects={name: obj.model_copy(deep=True) for name, obj in self.objects.items()},
             facts={"calibration": "wrs2-ur7e-dh50-v1", "collision_checked": False, **self.facts},
         )
