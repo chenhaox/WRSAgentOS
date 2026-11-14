@@ -1,3 +1,6 @@
 [submodule "third_party/wrs"]
 	path = third_party/wrs
 	url = https://github.com/chenhaox/WRS2.git
+[submodule "FAFU_station"]
+	path = FAFU_station
+	url = https://github.com/FAFU-Robotics/FAFU_station.git
